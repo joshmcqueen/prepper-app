@@ -1,0 +1,7 @@
+node_modules
+.local
+data
+dist
+pnpm-lock.yaml
+test-results
+playwright-report

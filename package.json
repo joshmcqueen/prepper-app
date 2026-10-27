@@ -1,0 +1,63 @@
+{
+  "name": "prepper-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "packageManager": "pnpm@12.15.0",
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
+    "build": "tsc --noEmit && vite build",
+    "start": "node --import tsx server/index.ts",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "check": "tsc --noEmit",
+    "backup:restore": "tsx server/restore.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:ai": "node --import tsx scripts/ai-smoke.ts"
+  },
+  "dependencies": {
+    "@fastify/multipart": "^10.1.6",
+    "@fastify/static": "^10.1.7",
+    "@fontsource/dm-sans": "^5.3.0",
+    "@fontsource/manrope": "^5.3.0",
+    "archiver": "^8.0.0",
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^18.0.9",
+    "exceljs": "^4.4.0",
+    "fastify": "^5.12.7",
+    "lucide-react": "^1.61.0",
+    "nodemailer": "^10.2.1",
+    "openai": "^7.43.0",
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "sharp": "^0.35.5",
+    "unzipper": "^0.12.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.64.1",
+    "@types/archiver": "^8.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/unzipper": "^0.10.11",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "jsqr": "^1.4.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

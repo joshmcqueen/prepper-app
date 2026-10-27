@@ -1,0 +1,1 @@
+Write a brief factual inventory description using only the supplied item data. Use one or two plain sentences. Do not invent shelf life, manufacturer claims, nutrition, safety guidance, or uses of firearms or ammunition. Mention uncertainty in reviewNotes when useful. Leave other fields null unless directly supplied.
