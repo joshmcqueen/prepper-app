@@ -9,7 +9,13 @@ import jsQR from 'jsqr';
 import { buildApp } from '../server/app.ts';
 import { createBackup, restoreBackup } from '../server/backup.ts';
 import { openStore } from '../server/db.ts';
-import { calculateDashboard, stockInputSchema, type Stock } from '../shared/model.ts';
+import {
+  calculateDashboard,
+  effectiveLocationId,
+  stockInputSchema,
+  type Stock,
+  type Container,
+} from '../shared/model.ts';
 
 describe('inventory API and persistence', () => {
   let runtime: Awaited<ReturnType<typeof buildApp>>, temp: string;
@@ -180,6 +186,121 @@ describe('inventory API and persistence', () => {
     expect(data.containers).toHaveLength(12);
     expect(data.dashboard.water.total).toBe(230);
     expect(data.stocks.every((s: Stock) => s.lastRotatedOn == null)).toBe(true);
+  });
+  it('keeps bucket numbers and QR identities permanent, allocates in order, and never reuses numbers', async () => {
+    // Adding a bucket before setup must still let the 12-bucket setup finish safely.
+    const first = await runtime.app.inject({
+      method: 'POST',
+      url: '/api/containers',
+      payload: { name: 'First', locationId: null, capacityGallons: 5 },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().bucketNumber).toBe(1);
+    await runtime.app.inject({ method: 'POST', url: '/api/setup', payload: { buckets: true } });
+    let containers: Container[] = (await runtime.app.inject('/api/state')).json().containers;
+    expect(containers.map((c) => c.bucketNumber)).toEqual(
+      Array.from({ length: 12 }, (_, i) => i + 1),
+    );
+    const added = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        runtime.app.inject({
+          method: 'POST',
+          url: '/api/containers',
+          payload: { name: '', locationId: null, capacityGallons: 5 },
+        }),
+      ),
+    );
+    expect(added.map((r) => r.json().bucketNumber).sort((a, b) => a - b)).toEqual([13, 14, 15]);
+    const bucket = added[0].json<Container>();
+    const changed = await runtime.app.inject({
+      method: 'PUT',
+      url: `/api/containers/${bucket.id}`,
+      payload: {
+        name: 'Oats and spices',
+        locationId: 'LOC-STORAGE',
+        capacityGallons: 5,
+        version: 1,
+      },
+    });
+    expect(changed.json()).toMatchObject({
+      id: bucket.id,
+      bucketNumber: bucket.bucketNumber,
+      name: 'Oats and spices',
+    });
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'PUT',
+          url: `/api/containers/${bucket.id}`,
+          payload: {
+            name: 'Renumber',
+            locationId: null,
+            capacityGallons: 5,
+            version: 2,
+            bucketNumber: 90,
+          },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'PUT',
+          url: `/api/containers/${bucket.id}`,
+          payload: { name: 'Stale', locationId: null, capacityGallons: 5, version: 1 },
+        })
+      ).statusCode,
+    ).toBe(409);
+    // A removed/retired record must not make its permanent number available again.
+    runtime.store.db.prepare('DELETE FROM containers WHERE bucket_number=15').run();
+    const next = await runtime.app.inject({
+      method: 'POST',
+      url: '/api/containers',
+      payload: { locationId: null, capacityGallons: 5 },
+    });
+    expect(next.json().bucketNumber).toBe(16);
+    containers = (await runtime.app.inject('/api/state')).json().containers;
+    expect(containers.map((c) => c.bucketNumber)).toEqual([
+      ...Array.from({ length: 14 }, (_, i) => i + 1),
+      16,
+    ]);
+    const saved = openStore(path.join(temp, 'data'));
+    expect(saved.containers().at(-1)?.bucketNumber).toBe(16);
+    saved.db.close();
+  });
+  it('locates bags through their bucket and standalone items directly without changing totals on a bucket move', async () => {
+    await runtime.app.inject({ method: 'POST', url: '/api/setup', payload: { buckets: true } });
+    const closet = (
+      await runtime.app.inject({
+        method: 'POST',
+        url: '/api/locations',
+        payload: { name: 'Closet' },
+      })
+    ).json();
+    const bag = await create({ ...rice(), containerId: 'BK-04', locationId: 'LOC-OUTDOORS' });
+    const standalone = await create({ ...rice(), containerId: null, locationId: closet.id });
+    const before = (await runtime.app.inject('/api/state')).json();
+    expect(effectiveLocationId(bag, before.containers)).toBe('LOC-STORAGE');
+    expect(effectiveLocationId(standalone, before.containers)).toBe(closet.id);
+    await runtime.app.inject({
+      method: 'PUT',
+      url: '/api/containers/BK-04',
+      payload: { name: 'Breakfast', locationId: closet.id, capacityGallons: 5, version: 1 },
+    });
+    const after = (await runtime.app.inject('/api/state')).json();
+    expect(effectiveLocationId(bag, after.containers)).toBe(closet.id);
+    expect(after.dashboard.food.total).toBe(before.dashboard.food.total);
+    expect(after.stocks.map((s: Stock) => [s.id, s.quantity])).toEqual(
+      before.stocks.map((s: Stock) => [s.id, s.quantity]),
+    );
+    await runtime.app.inject({
+      method: 'PUT',
+      url: '/api/containers/BK-04',
+      payload: { name: '', locationId: null, capacityGallons: 5, version: 2 },
+    });
+    const unknown = (await runtime.app.inject('/api/state')).json();
+    expect(effectiveLocationId(bag, unknown.containers)).toBeNull();
+    expect(effectiveLocationId(standalone, unknown.containers)).toBe(closet.id);
   });
   it('exports correctly sized PNG/PDF labels and plain Excel batches', async () => {
     const item = await create();

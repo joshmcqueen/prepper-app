@@ -202,19 +202,14 @@ export async function buildApp(options: {
     return { id: locationId, name };
   });
   const containerSchema = z.object({
-    name: z.string().trim().min(1).max(100),
+    bucketNumber: z.never().optional(),
+    name: z.string().trim().max(100).default(''),
     locationId: identity.nullable(),
     capacityGallons: z.number().positive().max(10000),
   });
   app.post('/api/containers', async (req) => {
     const c = containerSchema.parse(req.body);
-    if (c.locationId && !store.locations().some((l) => l.id === c.locationId))
-      throw new AppError(400, 'Location not found');
-    const containerId = id('BK');
-    store.db
-      .prepare('INSERT INTO containers(id,name,location_id,capacity_gallons) VALUES (?,?,?,?)')
-      .run(containerId, c.name, c.locationId, c.capacityGallons);
-    return { ...c, id: containerId, version: 1 };
+    return store.createContainer(c);
   });
   app.put('/api/containers/:id', async (req) => {
     const c = containerSchema.extend({ version: versionSchema }).parse(req.body);
@@ -230,7 +225,7 @@ export async function buildApp(options: {
         'UPDATE containers SET name=?,location_id=?,capacity_gallons=?,version=version+1 WHERE id=?',
       )
       .run(c.name, c.locationId, c.capacityGallons, containerId);
-    return { ...c, id: containerId, version: c.version + 1 };
+    return { ...c, id: containerId, bucketNumber: old.bucketNumber, version: c.version + 1 };
   });
   app.post('/api/setup', async (req) => {
     const { water, buckets } = z
@@ -266,16 +261,7 @@ export async function buildApp(options: {
         store.db.prepare("INSERT INTO meta VALUES ('setup_water','1')").run();
       }
       if (buckets && !store.db.prepare("SELECT 1 FROM meta WHERE key='setup_buckets'").get()) {
-        for (let n = 1; n <= 12; n++)
-          store.db
-            .prepare(
-              'INSERT INTO containers(id,name,location_id,capacity_gallons) VALUES (?,?,?,5)',
-            )
-            .run(
-              `BK-${String(n).padStart(2, '0')}`,
-              `Bucket ${String(n).padStart(2, '0')}`,
-              'LOC-STORAGE',
-            );
+        store.setupBuckets('LOC-STORAGE');
         store.db.prepare("INSERT INTO meta VALUES ('setup_buckets','1')").run();
       }
       return { ok: true };

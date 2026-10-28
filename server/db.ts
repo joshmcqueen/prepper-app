@@ -23,6 +23,7 @@ export class AppError extends Error {
   }
 }
 export const id = (prefix: string) => `${prefix}-${randomUUID().slice(0, 8).toUpperCase()}`;
+export const SCHEMA_VERSION = 2;
 type Row = Record<string, unknown>;
 export function openStore(dataDir: string) {
   fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
@@ -31,8 +32,14 @@ export function openStore(dataDir: string) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   const schema = fs.readFileSync(fileURLToPath(new URL('./schema.sql', import.meta.url)), 'utf8');
-  if (Number(db.pragma('user_version', { simple: true })) < 1)
-    db.transaction(() => db.exec(schema))();
+  const version = Number(db.pragma('user_version', { simple: true }));
+  if (version === 0) db.transaction(() => db.exec(schema))();
+  else if (version !== SCHEMA_VERSION) {
+    db.close();
+    throw new Error(
+      'Prototype schema changed. Stop the server, remove the data directory, restart, and reseed.',
+    );
+  }
   db.prepare('INSERT OR IGNORE INTO settings VALUES (1,?)').run(
     JSON.stringify(
       settingsSchema.parse({ appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:5173' }),
@@ -321,9 +328,51 @@ export function openStore(dataDir: string) {
   function containers(): Container[] {
     return db
       .prepare(
-        'SELECT id,name,location_id AS locationId,capacity_gallons AS capacityGallons,version FROM containers ORDER BY name',
+        'SELECT id,bucket_number AS bucketNumber,name,location_id AS locationId,capacity_gallons AS capacityGallons,version FROM containers ORDER BY bucket_number',
       )
       .all() as Container[];
+  }
+  function createContainer(
+    input: Pick<Container, 'name' | 'locationId' | 'capacityGallons'>,
+    containerId = id('BK'),
+  ): Container {
+    return db.transaction(() => {
+      if (input.locationId && !locations().some((l) => l.id === input.locationId))
+        throw new AppError(400, 'Location not found');
+      const highest =
+        (db.prepare('SELECT MAX(bucket_number) AS n FROM containers').get() as { n: number | null })
+          .n || 0;
+      const saved = Number(
+        (
+          db.prepare("SELECT value FROM meta WHERE key='last_bucket_number'").get() as
+            { value: string } | undefined
+        )?.value || 0,
+      );
+      const bucketNumber = Math.max(highest, saved) + 1;
+      db.prepare(
+        'INSERT INTO containers(id,bucket_number,name,location_id,capacity_gallons) VALUES (?,?,?,?,?)',
+      ).run(containerId, bucketNumber, input.name, input.locationId, input.capacityGallons);
+      db.prepare(
+        "INSERT INTO meta(key,value) VALUES ('last_bucket_number',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+      ).run(String(bucketNumber));
+      return { ...input, id: containerId, bucketNumber, version: 1 };
+    })();
+  }
+  function setupBuckets(locationId: string) {
+    db.transaction(() => {
+      const highest = Math.max(0, ...containers().map((c) => c.bucketNumber));
+      const saved = Number(
+        (
+          db.prepare("SELECT value FROM meta WHERE key='last_bucket_number'").get() as
+            { value: string } | undefined
+        )?.value || 0,
+      );
+      for (let n = Math.max(highest, saved) + 1; n <= 12; n++)
+        createContainer(
+          { name: '', locationId, capacityGallons: 5 },
+          `BK-${String(n).padStart(2, '0')}`,
+        );
+    })();
   }
   function reset() {
     db.transaction(() => {
@@ -363,6 +412,8 @@ export function openStore(dataDir: string) {
     saveSettings,
     locations,
     containers,
+    createContainer,
+    setupBuckets,
     log,
     checkVersion,
     reset,

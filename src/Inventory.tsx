@@ -30,6 +30,9 @@ import {
   Toggle,
 } from './ui';
 import {
+  bucketName,
+  bucketNumberLabel,
+  effectiveLocationId,
   calendarDay,
   round,
   rotationDate,
@@ -42,9 +45,11 @@ import {
 function place(stock: Stock, state: ReturnType<typeof useApp>['state']) {
   const container = state.containers.find((c) => c.id === stock.containerId);
   const location = state.locations.find(
-    (l) => l.id === (container?.locationId || stock.locationId),
+    (l) => l.id === effectiveLocationId(stock, state.containers),
   );
-  return [location?.name, container?.name].filter(Boolean).join(' · ') || 'Not assigned';
+  return [location?.name || 'Location not assigned', container && bucketName(container)]
+    .filter(Boolean)
+    .join(' · ');
 }
 export function Inventory({ category }: { category: Category }) {
   const { state, setModal, navigate, mutate, toast } = useApp();
@@ -204,9 +209,11 @@ export function Inventory({ category }: { category: Category }) {
 function StockTable({
   stocks,
   defaultCategory = 'food',
+  showLocationFilter = true,
 }: {
   stocks: Stock[];
   defaultCategory?: Category;
+  showLocationFilter?: boolean;
 }) {
   const { state, navigate, setModal } = useApp();
   const [search, setSearch] = useState(''),
@@ -216,12 +223,13 @@ function StockTable({
     [selected, setSelected] = useState<Set<string>>(new Set());
   const categories = [...new Set(stocks.map((s) => s.subcategory).filter(Boolean))].sort();
   const shown = stocks.filter((s) => {
-    const c = state.containers.find((c) => c.id === s.containerId);
     return (
       (showEmpty || s.quantity !== 0) &&
-      (!location || (c?.locationId || s.locationId) === location) &&
+      (!location || effectiveLocationId(s, state.containers) === location) &&
       (!subcategory || s.subcategory === subcategory) &&
-      `${s.name} ${s.brand} ${s.id} ${s.notes}`.toLowerCase().includes(search.toLowerCase())
+      `${s.name} ${s.brand} ${s.id} ${s.notes} ${place(s, state)}`
+        .toLowerCase()
+        .includes(search.toLowerCase())
     );
   });
   const selectedIds = stocks.filter((s) => selected.has(s.id)).map((s) => s.id);
@@ -237,18 +245,20 @@ function StockTable({
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <select
-          aria-label="Filter by location"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-        >
-          <option value="">All locations</option>
-          {state.locations.map((l) => (
-            <option key={l.id} value={l.id}>
-              {l.name}
-            </option>
-          ))}
-        </select>
+        {showLocationFilter && (
+          <select
+            aria-label="Filter by location"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+          >
+            <option value="">All locations</option>
+            {state.locations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           aria-label="Filter by category"
           value={subcategory}
@@ -460,7 +470,17 @@ export function StockDetail({ id }: { id: string }) {
           <dl className="detail-facts">
             <div>
               <dt>Storage</dt>
-              <dd>{place(stock, state)}</dd>
+              <dd>
+                {place(stock, state)}
+                {stock.containerId && (
+                  <button
+                    className="text-button"
+                    onClick={() => navigate(`/container/${stock.containerId}`)}
+                  >
+                    View bucket <ArrowRight size={14} />
+                  </button>
+                )}
+              </dd>
             </div>
             <div>
               <dt>Packaging</dt>
@@ -609,6 +629,7 @@ export function StockDetail({ id }: { id: string }) {
 }
 export function ContainersPage({ containerId }: { containerId?: string }) {
   const { state, setModal, navigate } = useApp();
+  const [locationId, setLocationId] = useState('');
   const container = state.containers.find((c) => c.id === containerId);
   if (containerId && !container)
     return (
@@ -621,12 +642,12 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
       <>
         <button className="text-button back-button" onClick={() => navigate('/containers')}>
           <ArrowLeft size={16} />
-          All buckets
+          All buckets & locations
         </button>
         <PageHeading
           eyebrow={`STORAGE · ${container.id}`}
-          title={container.name}
-          description={`${container.capacityGallons}-gallon bucket · ${state.locations.find((l) => l.id === container.locationId)?.name || 'No location'}`}
+          title={bucketName(container)}
+          description={`${container.capacityGallons}-gallon bucket · ${state.locations.find((l) => l.id === container.locationId)?.name || 'Location not assigned'}`}
           action={
             <button
               className="button secondary"
@@ -637,15 +658,40 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
             </button>
           }
         />
-        <StockTable stocks={state.stocks.filter((s) => s.containerId === container.id)} />
+        <div className="button-row">
+          <button
+            className="button secondary"
+            onClick={() => setModal({ type: 'labels', ids: [], containerIds: [container.id] })}
+          >
+            <Printer size={17} />
+            Make bucket label
+          </button>
+          <span className="subtle">
+            Permanent number {bucketNumberLabel(container)} · Contents update as you move bags.
+          </span>
+        </div>
+        <StockTable
+          stocks={state.stocks.filter((s) => s.containerId === container.id)}
+          showLocationFilter={false}
+        />
       </>
     );
+  const matchesLocation = (id: string | null) =>
+    !locationId || (locationId === '__unassigned' ? !id : id === locationId);
+  const buckets = state.containers.filter((c) => matchesLocation(c.locationId));
+  const stocks = state.stocks.filter((s) =>
+    matchesLocation(effectiveLocationId(s, state.containers)),
+  );
+  const locationName =
+    locationId === '__unassigned'
+      ? 'Unassigned location'
+      : state.locations.find((l) => l.id === locationId)?.name;
   return (
     <>
       <PageHeading
         eyebrow="A PLACE FOR EVERYTHING"
         title="Storage & buckets"
-        description="Find every bag. Give every bucket a stable identity."
+        description="Find supplies across your garage, attic, closets, and anywhere else. Buckets keep their numbers wherever they go."
         action={
           <button className="button" onClick={() => setModal({ type: 'container' })}>
             <Plus size={18} />
@@ -653,24 +699,43 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
           </button>
         }
       />
-      <div className="button-row">
+      <div className="storage-toolbar">
+        <Field label="Browse storage location">
+          <select
+            aria-label="Browse storage location"
+            value={locationId}
+            onChange={(e) => setLocationId(e.target.value)}
+          >
+            <option value="">All locations</option>
+            {state.locations.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+            <option value="__unassigned">Location not assigned</option>
+          </select>
+        </Field>
         <button
           className="button secondary"
-          disabled={!state.containers.length}
+          disabled={!buckets.length}
           onClick={() =>
-            setModal({ type: 'labels', ids: [], containerIds: state.containers.map((c) => c.id) })
+            setModal({ type: 'labels', ids: [], containerIds: buckets.map((c) => c.id) })
           }
         >
           <Printer size={17} />
           Bucket labels
         </button>
-        <button className="text-button" onClick={() => navigate('/settings')}>
+        <button className="text-button" onClick={() => navigate('/settings#storage')}>
           Manage locations <ArrowRight size={16} />
         </button>
       </div>
+      <h2 className="storage-section-heading">
+        {locationName ? `Buckets · ${locationName}` : 'Your buckets'}
+      </h2>
       <div className="container-grid">
-        {state.containers.map((c) => {
+        {buckets.map((c) => {
           const contents = state.stocks.filter((s) => s.containerId === c.id && s.quantity !== 0);
+          const names = [...new Set(contents.map((s) => s.name))];
           return (
             <button
               key={c.id}
@@ -679,16 +744,22 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
             >
               <div>
                 <Package size={28} strokeWidth={1.3} />
-                <span className="status-pill">{c.id}</span>
+                <span className="bucket-number">{bucketNumberLabel(c)}</span>
               </div>
-              <h3>{c.name}</h3>
+              <h3>{bucketName(c)}</h3>
               <p>
                 <MapPin size={14} />
-                {state.locations.find((l) => l.id === c.locationId)?.name || 'No location'}
+                {state.locations.find((l) => l.id === c.locationId)?.name ||
+                  'Location not assigned'}
+              </p>
+              <p className="bucket-contents">
+                {names.length
+                  ? `${names.slice(0, 3).join(', ')}${names.length > 3 ? ` + ${names.length - 3} more` : ''}`
+                  : 'No current contents'}
               </p>
               <footer>
                 <span>
-                  {contents.length} bag{contents.length === 1 ? '' : 's'} · {c.capacityGallons} gal
+                  {contents.length} item{contents.length === 1 ? '' : 's'} · {c.capacityGallons} gal
                   capacity
                 </span>
                 <ArrowRight size={17} />
@@ -697,11 +768,18 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
           );
         })}
       </div>
-      {!state.containers.length && (
-        <Empty title="Ready for a little organization">
-          Create your buckets here, or add your set of 12 from the overview.
+      {!buckets.length && (
+        <Empty title="No buckets here yet">
+          Supplies can live directly in a location, or inside a numbered bucket.
         </Empty>
       )}
+      <h2 className="storage-section-heading">
+        {locationName ? `Resources · ${locationName}` : 'Resources across all locations'}
+      </h2>
+      <p className="section-description">
+        Includes standalone items and bags inside buckets. Each resource shows where to find it.
+      </p>
+      <StockTable key={locationId} stocks={stocks} showLocationFilter={false} />
     </>
   );
 }
@@ -726,7 +804,7 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
   const [action, setAction] = useState('use'),
     [amount, setAmount] = useState<number | null>(null),
     [date, setDate] = useState(calendarDay(new Date(), state.settings.timezone)),
-    [locationId, setLocation] = useState(stock.locationId || ''),
+    [locationId, setLocation] = useState(effectiveLocationId(stock, state.containers) || ''),
     [containerId, setContainer] = useState(stock.containerId || ''),
     [note, setNote] = useState(''),
     [error, setError] = useState(''),
@@ -811,10 +889,22 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
           )}
           {action === 'move' && (
             <>
-              <Field label="Location">
+              <Field
+                label="Location"
+                hint={
+                  containerId
+                    ? 'This bag follows its bucket’s location. Edit the bucket to move all its contents.'
+                    : 'Choose where this standalone item is stored.'
+                }
+              >
                 <select
                   aria-label="New storage location"
-                  value={locationId}
+                  disabled={!!containerId}
+                  value={
+                    containerId
+                      ? state.containers.find((c) => c.id === containerId)?.locationId || ''
+                      : locationId
+                  }
                   onChange={(e) => setLocation(e.target.value)}
                 >
                   <option value="">Not assigned</option>
@@ -834,7 +924,7 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
                   <option value="">No bucket / standalone</option>
                   {state.containers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {bucketName(c)}
                     </option>
                   ))}
                 </select>
@@ -995,7 +1085,7 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
                   <option value="">No bucket</option>
                   {state.containers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {bucketName(c)}
                     </option>
                   ))}
                 </select>
@@ -1054,7 +1144,9 @@ function LabelsModal({
     })),
     ...containerIds.map((id) => ({
       id,
-      name: state.containers.find((c) => c.id === id)?.name || id,
+      name: state.containers.find((c) => c.id === id)
+        ? bucketName(state.containers.find((c) => c.id === id)!)
+        : id,
       container: true,
     })),
   ];
@@ -1164,7 +1256,7 @@ function ContainerModal({ id, onClose }: { id?: string; onClose: () => void }) {
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
   return (
-    <Modal title={old ? 'Edit bucket' : 'Give a bucket a home'} onClose={onClose}>
+    <Modal title={old ? `Edit ${bucketName(old)}` : 'Give a bucket a home'} onClose={onClose}>
       <form
         onSubmit={async (e) => {
           e.preventDefault();
@@ -1191,10 +1283,15 @@ function ContainerModal({ id, onClose }: { id?: string; onClose: () => void }) {
         }}
       >
         <div className="modal-body">
-          <Field label="Bucket name">
+          <p className="section-description">
+            {old
+              ? `Permanent bucket number: ${bucketNumberLabel(old)}. This stays with the physical bucket when you move or refill it.`
+              : 'A permanent number is assigned when you save. Existing bucket numbers never change.'}
+          </p>
+          <Field label="Nickname (optional)">
             <input
-              aria-label="Bucket name"
-              required
+              aria-label="Bucket nickname"
+              placeholder="e.g. Breakfast supplies"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />

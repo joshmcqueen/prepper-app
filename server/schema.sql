@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS locations (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS containers (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, location_id TEXT REFERENCES locations(id),
+  id TEXT PRIMARY KEY, bucket_number INTEGER NOT NULL UNIQUE CHECK(bucket_number>0),
+  name TEXT NOT NULL, location_id TEXT REFERENCES locations(id),
   capacity_gallons REAL NOT NULL CHECK(capacity_gallons>0), version INTEGER NOT NULL DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS catalog_items (
@@ -34,4 +35,4 @@ CREATE TABLE IF NOT EXISTS reminder_outbox (
   status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt TEXT NOT NULL, created_at TEXT NOT NULL, sent_at TEXT, error TEXT
 );
-PRAGMA user_version=1;
+PRAGMA user_version=2;

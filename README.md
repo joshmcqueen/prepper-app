@@ -38,7 +38,8 @@ During this prototype phase there is **one disposable schema**, `server/schema.s
 
 - Food catalogs hold nutrition and common details. Purchase batches hold purchase, best-by, and expiration dates. Individual stock units hold remaining quantities, packaging, storage, rotation, and reminder preferences.
 - Splitting a batch subtracts the assigned quantity from its original unit and creates bags sharing the same batch. Totals are conserved. A zero-quantity original stays in history and is hidden unless **Show empty** is enabled.
-- Buckets are reusable containers, not additional food. A bucket can hold bags from several batches or foods. Its location takes precedence over a bag’s standalone location.
+- Buckets are reusable containers, not additional food. Each has a permanent number (01–12 in setup, then 13 onward); nicknames and locations can change without changing the number or QR link. Numbers are assigned on the server, sorted numerically, and never reused within a database. A full reset starts numbering over.
+- Locations such as Garage, Attic, or Closet can contain standalone resources and buckets. Storage & buckets lets you browse everything at a place across categories. A bag follows its bucket’s location, including an unknown location; it never falls back to an old standalone location. Move the bucket once to relocate all its bags without changing quantities.
 - Shared catalog/batch edits also update sibling bags and their versions. If another device changes a record before you save, the API returns a conflict and leaves your form intact. Copy important unsaved edits, close the form, reload the page, and edit the fresh record.
 - **Use** and **Refill** adjust quantities; **Set remaining amount** records a stock check. **Rotate** updates the rotation date without assuming the container was refilled. Quantities do not change automatically.
 - Gallons on a Mylar bag describe packaging capacity, not food weight. The app converts compatible mass or volume units, and never assumes a food density.
@@ -89,7 +90,7 @@ Install **only the public root certificate** from `mkcert -CAROOT` on your iPhon
 
 Default labels are **50 × 80 mm at 203 dpi**. Set your actual roll dimensions in Settings. Labels narrower than 35 mm or shorter than 40 mm use a compact name, ID, and QR layout; use 50 × 80 mm for quantities and dates. Set a stable LAN app address before printing; `localhost` QR links will not reach your computer from another device.
 
-Select resources in an inventory list, use **Labels**, or make a label from an individual resource. Bucket labels are available from Storage & buckets. QR codes use stable unit or bucket IDs. Bucket links always show current contents; printed quantities and dates on food labels are snapshots and need reprinting after relevant edits.
+Select resources in an inventory list, use **Labels**, or make a label from an individual resource. Bucket labels are available from Storage & buckets. QR codes use stable unit or bucket IDs. Bucket labels feature a large permanent number; their links always show current contents; printed quantities and dates on food labels are snapshots and need reprinting after relevant edits.
 
 - **PNG:** one selected label, ready to import as an image into Print Master.
 - **PDF:** one accurately sized page per label for a supported desktop/print workflow. Disable fit-to-page scaling.

@@ -439,8 +439,8 @@ export function SettingsPage() {
           <span className="eyebrow">KNOW WHERE TO LOOK</span>
           <h2>Storage locations</h2>
           <p className="section-description">
-            Move a bucket to a new location from Storage & buckets. Its bags will follow that
-            location.
+            Add places such as Garage, Attic, or Closet. Items can live directly in a location or
+            inside a bucket. Move a bucket from Storage & buckets and all its bags follow.
           </p>
           {state.locations.map((l) => (
             <LocationRow key={l.id} location={l} />
@@ -448,7 +448,7 @@ export function SettingsPage() {
           <div className="inline-input">
             <input
               aria-label="Add storage location"
-              placeholder="e.g. Garage, pantry, hallway closet"
+              placeholder="e.g. Garage, attic, hallway closet"
               value={newLocation}
               onChange={(e) => setNewLocation(e.target.value)}
             />

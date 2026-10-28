@@ -214,3 +214,79 @@ test('dashboard and inventory form have no serious accessibility violations', as
       .map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
   ).toEqual([]);
 });
+
+test('permanent bucket labels and browsing locations include bags and standalone supplies', async ({
+  page,
+  request,
+}) => {
+  await page.goto('/containers');
+  const bucket = page
+    .locator('.container-card')
+    .filter({ has: page.getByRole('heading', { name: 'Bucket 04', exact: true }) });
+  await expect(bucket).toContainText('Old-fashioned rolled oats');
+  await expect(bucket).toContainText('Spices');
+  await expect(bucket).toContainText('Freeze-dried blueberries');
+  await page
+    .getByRole('combobox', { name: 'Browse storage location' })
+    .selectOption({ label: 'Attic' });
+  await expect(page.getByRole('button', { name: /^Emergency blankets/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Old-fashioned rolled oats/ })).toHaveCount(0);
+  await page
+    .getByRole('combobox', { name: 'Browse storage location' })
+    .selectOption({ label: 'Hallway closet' });
+  await expect(page.getByRole('button', { name: /^Toilet paper rolls/ })).toBeVisible();
+  await page
+    .getByRole('combobox', { name: 'Browse storage location' })
+    .selectOption({ label: 'Garage shelves' });
+  await bucket.click();
+  await page.getByRole('button', { name: 'Make bucket label', exact: true }).click();
+  await page.getByAltText('Label preview').evaluate((img: HTMLImageElement) => img.decode());
+  await page.getByAltText('Label preview').scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-bucket-label.png`,
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.getByRole('button', { name: 'Edit bucket', exact: true }).click();
+  await page
+    .getByRole('textbox', { name: 'Bucket nickname', exact: true })
+    .fill('Breakfast supplies');
+  await page
+    .getByRole('combobox', { name: 'Bucket location', exact: true })
+    .selectOption({ label: 'Hallway closet' });
+  await page.getByRole('button', { name: 'Save bucket', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Bucket 04 · Breakfast supplies', exact: true }),
+  ).toBeVisible();
+  await expect(page.locator('.page-heading')).toContainText('Hallway closet');
+  await page.getByRole('button', { name: /^Old-fashioned rolled oats/ }).click();
+  await expect(page.locator('.detail-facts').first()).toContainText(
+    'Hallway closet · Bucket 04 · Breakfast supplies',
+  );
+  await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
+  await expect(
+    page.getByRole('combobox', { name: 'Storage location', exact: true }),
+  ).toBeDisabled();
+  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page.goto('/containers');
+  await page
+    .getByRole('combobox', { name: 'Browse storage location' })
+    .selectOption({ label: 'Hallway closet' });
+  await expect(page.getByRole('button', { name: /^Toilet paper rolls/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Old-fashioned rolled oats/ })).toBeVisible();
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-storage-locations.png`,
+    fullPage: true,
+  });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: 'Add bucket', exact: true }).click();
+  await page.getByRole('button', { name: 'Save bucket', exact: true }).click();
+  const state = await (await request.get('/api/state')).json();
+  expect(state.containers.at(-1).bucketNumber).toBe(13);
+  await page
+    .getByRole('combobox', { name: 'Browse storage location' })
+    .selectOption('__unassigned');
+  await expect(page.getByRole('heading', { name: 'Bucket 13', exact: true })).toBeVisible();
+});

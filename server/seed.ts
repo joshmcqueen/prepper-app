@@ -45,16 +45,11 @@ export async function seedDemo(store: Store, now = new Date()) {
       ['LOC-PANTRY', 'Pantry'],
       ['LOC-GARAGE', 'Garage shelves'],
       ['LOC-ESSENTIALS', 'Essentials cabinet'],
+      ['LOC-ATTIC', 'Attic'],
+      ['LOC-CLOSET', 'Hallway closet'],
     ])
       store.db.prepare('INSERT INTO locations VALUES (?,?)').run(id, name);
-    for (let n = 1; n <= 12; n++)
-      store.db
-        .prepare('INSERT INTO containers(id,name,location_id,capacity_gallons) VALUES (?,?,?,5)')
-        .run(
-          `BK-${String(n).padStart(2, '0')}`,
-          `Bucket ${String(n).padStart(2, '0')}`,
-          'LOC-GARAGE',
-        );
+    store.setupBuckets('LOC-GARAGE');
     const add = (input: Partial<StockInput> & { name: string; category: StockInput['category'] }) =>
       store.create(
         stockInputSchema.parse({ locationId: 'LOC-PANTRY', purchasedOn: day(-60), ...input }),
@@ -99,6 +94,20 @@ export async function seedDemo(store: Store, now = new Date()) {
         carbs: 27,
         fat: 3,
       },
+    });
+    food({
+      name: 'Spices',
+      quantity: 0.5,
+      containerId: 'BK-04',
+      packaging: 'mylar_1',
+      notes: 'Fictional sample bag; replace with your own details.',
+    });
+    food({
+      name: 'Freeze-dried blueberries',
+      quantity: 2,
+      containerId: 'BK-04',
+      packaging: 'mylar_1',
+      notes: 'Fictional sample bag; nutrition and dates are unknown.',
     });
     food({
       name: 'Dry pinto beans',
@@ -274,7 +283,19 @@ export async function seedDemo(store: Store, now = new Date()) {
       minimum: 1,
       rotationOn: day(45),
     });
-    supply({ name: 'Toilet paper rolls', subcategory: 'Sanitation', quantity: 24, minimum: 12 });
+    supply({
+      name: 'Toilet paper rolls',
+      subcategory: 'Sanitation',
+      quantity: 24,
+      minimum: 12,
+      locationId: 'LOC-CLOSET',
+    });
+    supply({
+      name: 'Emergency blankets · sample',
+      subcategory: 'Shelter',
+      quantity: 4,
+      locationId: 'LOC-ATTIC',
+    });
     supply({ name: 'LED flashlights', subcategory: 'Tools', quantity: 4, minimum: 2 });
     supply({
       name: 'Firearms · sample inventory',

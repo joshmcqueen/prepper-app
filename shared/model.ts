@@ -185,11 +185,25 @@ export type Settings = z.infer<typeof settingsSchema>;
 export type Location = { id: string; name: string };
 export type Container = {
   id: string;
+  bucketNumber: number;
   name: string;
   locationId: string | null;
   capacityGallons: number;
   version: number;
 };
+export const bucketNumberLabel = (container: Container) =>
+  String(container.bucketNumber).padStart(2, '0');
+export function bucketName(container: Container): string {
+  const title = `Bucket ${bucketNumberLabel(container)}`;
+  return container.name && container.name !== title ? `${title} · ${container.name}` : title;
+}
+export function effectiveLocationId(
+  stock: Pick<Stock, 'containerId' | 'locationId'>,
+  containers: Container[],
+): string | null {
+  const container = containers.find((c) => c.id === stock.containerId);
+  return container ? container.locationId : stock.locationId;
+}
 export type Alert = {
   key: string;
   stockId: string | null;

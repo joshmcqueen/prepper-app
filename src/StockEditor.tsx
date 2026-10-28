@@ -4,6 +4,8 @@ import { categoryNames, api } from './api';
 import { useApp } from './App';
 import { AsyncButton, Busy, ErrorMessage, Field, Modal, Num, Toggle } from './ui';
 import {
+  bucketName,
+  effectiveLocationId,
   stockInputSchema,
   unitSchema,
   type Category,
@@ -652,18 +654,25 @@ export function StockEditor({
                   <option value="">No bucket / standalone</option>
                   {state.containers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} · {c.id}
+                      {bucketName(c)} ·{' '}
+                      {state.locations.find((l) => l.id === c.locationId)?.name ||
+                        'Location not assigned'}
                     </option>
                   ))}
                 </select>
               </Field>
               <Field
                 label="Storage location"
-                hint="A bucket’s location takes precedence when a bag is inside it."
+                hint={
+                  form.containerId
+                    ? 'This bag follows its bucket’s location. Edit the bucket to move all its contents.'
+                    : 'Standalone items can be stored in any location.'
+                }
               >
                 <select
                   aria-label="Storage location"
-                  value={form.locationId || ''}
+                  disabled={!!form.containerId}
+                  value={effectiveLocationId(form, state.containers) || ''}
                   onChange={(e) => field('locationId', e.target.value || null)}
                 >
                   <option value="">Not assigned</option>
@@ -678,13 +687,14 @@ export function StockEditor({
                 <div className="inline-input">
                   <input
                     aria-label="New location name"
+                    disabled={!!form.containerId}
                     value={newLocation}
                     onChange={(e) => setNewLocation(e.target.value)}
                     placeholder="e.g. Garage shelf"
                   />
                   <AsyncButton
                     className="icon-button"
-                    disabled={!newLocation.trim()}
+                    disabled={!!form.containerId || !newLocation.trim()}
                     action={async () => {
                       const l = await api<{ id: string }>('/api/locations', 'POST', {
                         name: newLocation,

@@ -5,7 +5,7 @@ import os from 'node:os';
 import { ZipArchive } from 'archiver';
 import unzipper from 'unzipper';
 import Database from 'better-sqlite3';
-import type { Store } from './db.ts';
+import { SCHEMA_VERSION, type Store } from './db.ts';
 
 export async function createBackup(
   store: Store,
@@ -31,7 +31,12 @@ export async function createBackup(
       archive.file(path.join(store.dataDir, 'uploads', photo), { name: `uploads/${photo}` });
     archive.append(
       JSON.stringify(
-        { app: 'haven-prepper', schemaVersion: 1, createdAt: new Date().toISOString(), photos },
+        {
+          app: 'haven-prepper',
+          schemaVersion: SCHEMA_VERSION,
+          createdAt: new Date().toISOString(),
+          photos,
+        },
         null,
         2,
       ),
@@ -57,7 +62,7 @@ export async function restoreBackup(file: string, destination: string) {
   const manifest = manifestFile ? JSON.parse((await manifestFile.buffer()).toString('utf8')) : null;
   if (
     manifest?.app !== 'haven-prepper' ||
-    manifest.schemaVersion !== 1 ||
+    manifest.schemaVersion !== SCHEMA_VERSION ||
     !Array.isArray(manifest.photos)
   )
     throw new Error('Unsupported backup manifest');
@@ -89,7 +94,7 @@ export async function restoreBackup(file: string, destination: string) {
     try {
       if (
         db.pragma('integrity_check', { simple: true }) !== 'ok' ||
-        db.pragma('user_version', { simple: true }) !== 1
+        db.pragma('user_version', { simple: true }) !== SCHEMA_VERSION
       )
         throw new Error('Backup database failed validation');
     } finally {
