@@ -45,6 +45,8 @@ export const stockInputSchema = z
     rotationOn: date,
     lastRotatedOn: date,
     rotationMonths: z.number().int().min(1).max(1200).nullable().default(null),
+    rotationDays: z.number().int().min(1).max(36500).nullable().default(null),
+    rotationDestination: z.enum(['hot_tub']).nullable().default(null),
     photoIds: z
       .array(z.string().regex(/^[a-f0-9-]+\.webp$/))
       .max(12)
@@ -65,6 +67,27 @@ export const stockInputSchema = z
     snoozedUntil: date,
   })
   .superRefine((v, ctx) => {
+    if (v.rotationDays != null && v.rotationMonths != null)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rotationDays'],
+        message: 'Choose days or months for the rotation interval',
+      });
+    if (v.rotationDestination === 'hot_tub' && (v.category !== 'water' || v.packaging !== 'tank'))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rotationDestination'],
+        message: 'Hot tub rotation is available for water tanks',
+      });
+    if (
+      v.rotationDestination === 'hot_tub' &&
+      (!v.capacity || (!v.rotationDays && !v.rotationMonths))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capacity'],
+        message: 'Hot tub rotation needs a positive tank capacity and rotation interval',
+      });
     if (v.capacity != null && v.quantity != null && v.quantity > v.capacity)
       ctx.addIssue({
         code: 'custom',
@@ -272,13 +295,33 @@ export function addMonths(value: string, months: number): string {
   d.setUTCDate(Math.min(day, end));
   return d.toISOString().slice(0, 10);
 }
+export function addDays(value: string, days: number): string {
+  const d = new Date(`${value}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 export function rotationDate(stock: StockInput): string | null {
   return (
     stock.rotationOn ||
-    (stock.lastRotatedOn && stock.rotationMonths
-      ? addMonths(stock.lastRotatedOn, stock.rotationMonths)
-      : null)
+    (stock.lastRotatedOn && stock.rotationDays
+      ? addDays(stock.lastRotatedOn, stock.rotationDays)
+      : stock.lastRotatedOn && stock.rotationMonths
+        ? addMonths(stock.lastRotatedOn, stock.rotationMonths)
+        : null)
   );
+}
+export function waterTankInput(): StockInput {
+  return stockInputSchema.parse({
+    category: 'water',
+    name: 'Outdoor water tank',
+    capacity: 300,
+    unit: 'gallon',
+    packaging: 'tank',
+    locationId: 'LOC-OUTDOORS',
+    rotationDays: 45,
+    rotationDestination: 'hot_tub',
+    leadDays: 7,
+  });
 }
 export const round = (n: number) => Math.round(n * 1e8) / 1e8;
 export function calculateDashboard(

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { useApp, CoverageCard, PageHeading, type ModalState } from './App';
 import { api, categoryNames, dateLabel, download, number } from './api';
+import { WaterTank } from './WaterTank';
 import {
   AsyncButton,
   Busy,
@@ -125,10 +126,10 @@ export function Inventory({ category }: { category: Category }) {
                     className="button small secondary"
                     action={async () => {
                       await mutate('/api/setup', 'POST', { water: true });
-                      toast('Added six jugs and your outdoor tank');
+                      toast('Added six jugs; tank added only if needed');
                     }}
                   >
-                    Confirm & add your 230-gallon setup
+                    Add six 5-gallon jugs & a tank if needed
                   </AsyncButton>
                 )}
               </>
@@ -182,6 +183,7 @@ export function Inventory({ category }: { category: Category }) {
           </div>
         </div>
       )}
+      {category === 'water' && <WaterTank />}
       {category === 'fuel' && state.dashboard.alternativeFuel.length > 0 && (
         <div className="alternative-fuels">
           {state.dashboard.alternativeFuel.map((f) => (
@@ -506,10 +508,14 @@ export function StockDetail({ id }: { id: string }) {
               <dt>Last rotation</dt>
               <dd>{dateLabel(stock.lastRotatedOn)}</dd>
             </div>
-            {stock.rotationMonths && (
+            {(stock.rotationDays || stock.rotationMonths) && (
               <div>
                 <dt>Rotation interval</dt>
-                <dd>{stock.rotationMonths} months</dd>
+                <dd>
+                  {stock.rotationDays
+                    ? `${stock.rotationDays} days`
+                    : `${stock.rotationMonths} months`}
+                </dd>
               </div>
             )}
             <div>
@@ -1352,12 +1358,20 @@ function HistoryModal({ stock, onClose }: { stock: Stock; onClose: () => void })
             after = JSON.parse(row.afterJson);
           return (
             <div className="history-row" key={i}>
-              <strong>{row.action}</strong>
+              <strong>
+                {row.action === 'rotate_to_hot_tub' ? 'Hot tub rotation' : row.action}
+              </strong>
               <time>{new Date(row.createdAt).toLocaleString()}</time>
               <p>
                 {before?.quantity ?? 'Unknown'} → {after.quantity ?? 'Unknown'} {after.unit}
               </p>
               {row.note && <p>{row.note}</p>}
+              {row.action === 'rotate_to_hot_tub' && (
+                <p>
+                  Completed {dateLabel(after.lastRotatedOn)} · Next rotation{' '}
+                  {dateLabel(rotationDate(after))}
+                </p>
+              )}
             </div>
           );
         })}

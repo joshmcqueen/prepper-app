@@ -711,13 +711,31 @@ export function StockEditor({
               <Field label="Last rotated / refilled on">
                 {dateInput('lastRotatedOn', 'Last rotated on')}
               </Field>
-              <Field label="Rotate every (months)">
+              <Field label="Rotation interval unit">
+                <select
+                  aria-label="Rotation interval unit"
+                  value={form.rotationDays != null ? 'days' : 'months'}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      rotationDays: e.target.value === 'days' ? 45 : null,
+                      rotationMonths: e.target.value === 'months' ? 6 : null,
+                    })
+                  }
+                >
+                  <option value="months">Months</option>
+                  <option value="days">Days</option>
+                </select>
+              </Field>
+              <Field label={`Rotate every (${form.rotationDays != null ? 'days' : 'months'})`}>
                 <Num
-                  label="Rotation interval in months"
-                  value={form.rotationMonths}
+                  label={`Rotation interval in ${form.rotationDays != null ? 'days' : 'months'}`}
+                  value={form.rotationDays ?? form.rotationMonths}
                   min={1}
-                  max={1200}
-                  onChange={(n) => field('rotationMonths', n)}
+                  max={form.rotationDays != null ? 36500 : 1200}
+                  onChange={(n) =>
+                    field(form.rotationDays != null ? 'rotationDays' : 'rotationMonths', n)
+                  }
                 />
               </Field>
               <Field

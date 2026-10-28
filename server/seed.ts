@@ -213,13 +213,15 @@ export async function seedDemo(store: Store, now = new Date()) {
     add({
       category: 'water',
       name: 'Outdoor water tank',
-      quantity: 200,
-      capacity: 200,
+      quantity: 300,
+      capacity: 300,
       unit: 'gallon',
       packaging: 'tank',
       locationId: 'LOC-OUTDOORS',
-      rotationMonths: 6,
-      lastRotatedOn: addMonths(today, -7),
+      rotationDays: 45,
+      rotationDestination: 'hot_tub',
+      leadDays: 7,
+      lastRotatedOn: day(-46),
       highPriority: true,
     });
     for (const [i, quantity] of [20, 18, 12].entries())

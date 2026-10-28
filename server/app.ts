@@ -10,6 +10,7 @@ import {
   stockInputSchema,
   settingsSchema,
   calculateDashboard,
+  waterTankInput,
   type Settings,
 } from '../shared/model.ts';
 import { AppError, id, openStore, type Store } from './db.ts';
@@ -127,7 +128,16 @@ export async function buildApp(options: {
     const args = z
       .object({
         version: versionSchema,
-        action: z.enum(['use', 'refill', 'correct', 'empty', 'rotate', 'move']),
+        action: z.enum([
+          'use',
+          'refill',
+          'correct',
+          'empty',
+          'rotate',
+          'rotate_to_hot_tub',
+          'move',
+        ]),
+        refilled: z.boolean().optional(),
         amount: z.number().finite().min(0).max(1e12).optional(),
         date: stockInputSchema.shape.lastRotatedOn.optional(),
         locationId: identity.nullable().optional(),
@@ -246,18 +256,8 @@ export async function buildApp(options: {
               locationId: 'LOC-STORAGE',
             }),
           );
-        store.create(
-          stockInputSchema.parse({
-            category: 'water',
-            name: 'Outdoor water tank',
-            quantity: 200,
-            capacity: 200,
-            unit: 'gallon',
-            packaging: 'tank',
-            rotationMonths: 6,
-            locationId: 'LOC-OUTDOORS',
-          }),
-        );
+        if (!store.all().some((s) => s.category === 'water' && s.packaging === 'tank'))
+          store.create(waterTankInput());
         store.db.prepare("INSERT INTO meta VALUES ('setup_water','1')").run();
       }
       if (buckets && !store.db.prepare("SELECT 1 FROM meta WHERE key='setup_buckets'").get()) {

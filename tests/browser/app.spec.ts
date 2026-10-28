@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { addDays, calendarDay } from '../../shared/model';
 test.beforeEach(async ({ request }) => {
   const r = await request.post('/api/database/reset', {
     data: { mode: 'demo', confirmation: 'RESET' },
@@ -11,7 +12,7 @@ test('sample dashboard, inventory editing, manual use, and label preview', async
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'A little more prepared.' })).toBeVisible();
-  await expect(page.getByText('230', { exact: true })).toBeVisible();
+  await expect(page.getByText('330', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -289,4 +290,169 @@ test('permanent bucket labels and browsing locations include bags and standalone
     .getByRole('combobox', { name: 'Browse storage location' })
     .selectOption('__unassigned');
   await expect(page.getByRole('heading', { name: 'Bucket 13', exact: true })).toBeVisible();
+});
+
+test('tank setup, hot tub rotation, refill confirmation, and conflict recovery', async ({
+  page,
+  request,
+}) => {
+  await request.post('/api/database/reset', { data: { mode: 'empty', confirmation: 'RESET' } });
+  await page.goto('/water');
+  await page.getByRole('button', { name: 'Set up 300-gallon tank', exact: true }).click();
+  await page.getByRole('button', { name: 'Save tank setup', exact: true }).click();
+  const panel = page.getByRole('region', { name: 'Water tank rotation' });
+  await expect(panel.getByText('Unknown', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Add your last rotation date', { exact: true })).toBeVisible();
+  await expect(panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' })).toHaveCount(0);
+  let state = await (await request.get('/api/state')).json();
+  expect(state.stocks).toHaveLength(1);
+  expect(state.dashboard.water.total).toBe(0);
+  const tank = state.stocks[0];
+  expect(tank.capacity).toBe(300);
+  expect(tank.rotationDays).toBe(45);
+
+  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const today = await dialog.getByLabel('Tank rotation date').inputValue();
+  const expected = new Date(`${today}T00:00:00Z`);
+  expected.setUTCDate(expected.getUTCDate() + 45);
+  const next = expected.toISOString().slice(0, 10);
+  await dialog.getByRole('textbox', { name: 'Tank rotation note' }).fill('Transferred to hot tub');
+  // Another device updates the tank while this form remains open.
+  await request.put(`/api/stocks/${tank.id}`, { data: { ...tank, notes: 'Other device' } });
+  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('changed on another device');
+  await expect(dialog.getByRole('textbox', { name: 'Tank rotation note' })).toHaveValue(
+    'Transferred to hot tub',
+  );
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.reload();
+  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  state = await (await request.get('/api/state')).json();
+  expect(state.stocks[0].quantity).toBeNull();
+  expect(state.dashboard.alerts.find((a: { type: string }) => a.type === 'rotation').date).toBe(
+    next,
+  );
+
+  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
+  await dialog.getByRole('switch', { name: /Tank refilled to full/ }).check();
+  await dialog.getByRole('textbox', { name: 'Tank rotation note' }).fill('Refilled after transfer');
+  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.reload();
+  await expect(panel.getByText('300 gallons', { exact: true })).toHaveCount(2);
+  await expect(panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' })).toHaveAttribute(
+    'aria-valuenow',
+    '0',
+  );
+  await panel.getByRole('button', { name: 'Rotation history', exact: true }).click();
+  await expect(dialog.getByText('Refilled after transfer', { exact: false })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-water-tank.png`,
+    fullPage: true,
+  });
+});
+
+test('rotation timeline shows elapsed time, due and overdue states, and unknown dates', async ({
+  page,
+  request,
+}) => {
+  const today = calendarDay(new Date(), 'America/Los_Angeles');
+  const state = await (await request.get('/api/state')).json();
+  const tank = state.stocks.find(
+    (s: { category: string; packaging: string }) =>
+      s.category === 'water' && s.packaging === 'tank',
+  );
+  async function setCycle(lastRotatedOn: string | null, rotationOn: string | null = null) {
+    const current = await (await request.get(`/api/stocks/${tank.id}`)).json();
+    const response = await request.put(`/api/stocks/${tank.id}`, {
+      data: { ...current, lastRotatedOn, rotationOn },
+    });
+    expect(response.ok()).toBe(true);
+    await page.goto('/water');
+  }
+  const panel = page.getByRole('region', { name: 'Water tank rotation' });
+  const progress = panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' });
+  await setCycle(addDays(today, -18));
+  await expect(progress).toHaveAttribute('aria-valuenow', '18');
+  await expect(progress).toHaveAttribute('aria-valuemax', '45');
+  await expect(progress).toHaveAttribute(
+    'aria-valuetext',
+    '18 of 45 days elapsed. 27 days until rotation.',
+  );
+  await expect(panel.getByLabel('27 days until rotation', { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page }).include('.water-tank-panel').analyze();
+  expect(
+    accessibility.violations
+      .filter((v) => ['critical', 'serious'].includes(v.impact || ''))
+      .map((v) => ({ id: v.id, nodes: v.nodes.map((n) => n.target) })),
+  ).toEqual([]);
+  await panel.screenshot({ path: `test-results/${test.info().project.name}-water-timeline.png` });
+
+  await setCycle(addDays(today, -45));
+  await expect(panel.getByText('Rotation due today', { exact: true })).toBeVisible();
+  await expect(progress).toHaveAttribute('aria-valuenow', '45');
+  await setCycle(addDays(today, -48));
+  await expect(panel.getByLabel('3 days overdue', { exact: true })).toBeVisible();
+  await expect(progress).toHaveAttribute('aria-valuenow', '45');
+  await expect(progress).toHaveAttribute(
+    'aria-valuetext',
+    '45 of 45 days elapsed. 3 days overdue.',
+  );
+  await setCycle(addDays(today, -18), addDays(today, 20));
+  await expect(progress).toHaveAttribute('aria-valuemax', '38');
+  await expect(progress).toHaveAttribute('aria-valuenow', '18');
+  await expect(panel.getByLabel('20 days until rotation', { exact: true })).toBeVisible();
+  await setCycle(null);
+  await expect(panel.getByText('Add your last rotation date', { exact: true })).toBeVisible();
+  await expect(progress).toHaveCount(0);
+  const final = await (await request.get(`/api/stocks/${tank.id}`)).json();
+  expect(final.quantity).toBe(300);
+});
+
+test('configures an existing tank for 45 days without duplicating water', async ({
+  page,
+  request,
+}) => {
+  const state = await (await request.get('/api/state')).json();
+  const tank = state.stocks.find(
+    (s: { category: string; packaging: string }) =>
+      s.category === 'water' && s.packaging === 'tank',
+  );
+  const configured = await request.put(`/api/stocks/${tank.id}`, {
+    data: {
+      ...tank,
+      capacity: 200,
+      quantity: 125,
+      rotationDestination: null,
+      rotationDays: null,
+      rotationMonths: 6,
+    },
+  });
+  expect(configured.ok()).toBe(true);
+  await page.goto('/water');
+  await page.getByRole('button', { name: 'Set up 45-day rotation', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(
+    dialog.getByRole('spinbutton', { name: 'Water currently in tank', exact: true }),
+  ).toHaveValue('125');
+  await dialog.getByRole('button', { name: 'Save tank setup', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const updated = await (await request.get('/api/state')).json();
+  expect(updated.stocks.length).toBe(state.stocks.length);
+  expect(updated.stocks.find((s: { id: string }) => s.id === tank.id)).toMatchObject({
+    capacity: 300,
+    quantity: 125,
+    rotationDays: 45,
+    rotationMonths: null,
+  });
 });

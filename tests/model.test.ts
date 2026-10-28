@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   addMonths,
+  addDays,
+  rotationDate,
+  waterTankInput,
   calendarDay,
   calculateDashboard,
   convert,
@@ -134,6 +137,21 @@ describe('coverage calculations', () => {
   });
 });
 describe('calendar dates', () => {
+  it('schedules exact 45-day tank cycles across DST, month ends, and leap days', () => {
+    expect(addDays('2026-10-28', 45)).toBe('2026-12-12');
+    expect(addDays('2024-01-31', 45)).toBe('2024-03-16');
+    expect(addDays('2026-03-01', 45)).toBe('2026-04-15');
+    const tank = waterTankInput();
+    expect(rotationDate(tank)).toBeNull();
+    expect(tank.quantity).toBeNull();
+    expect(rotationDate({ ...tank, lastRotatedOn: '2026-10-28' })).toBe('2026-12-12');
+    expect(rotationDate({ ...tank, lastRotatedOn: '2026-10-28', rotationOn: '2026-12-01' })).toBe(
+      '2026-12-01',
+    );
+    expect(stockInputSchema.safeParse({ ...tank, rotationMonths: 6 }).success).toBe(false);
+    expect(stockInputSchema.safeParse({ ...tank, rotationDays: 0 }).success).toBe(false);
+    expect(stockInputSchema.safeParse({ ...tank, rotationDays: 1.5 }).success).toBe(false);
+  });
   it('clamps month-end rotations, including leap years', () => {
     expect(addMonths('2026-08-31', 6)).toBe('2027-02-28');
     expect(addMonths('2023-08-31', 6)).toBe('2024-02-29');

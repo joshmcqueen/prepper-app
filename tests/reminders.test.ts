@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { openStore, type Store } from '../server/db.ts';
-import { stockInputSchema } from '../shared/model.ts';
+import { stockInputSchema, waterTankInput } from '../shared/model.ts';
 import { deliverPending, queueReminders, type MailJob } from '../server/reminders.ts';
 describe('persistent reminder delivery', () => {
   let store: Store, temp: string;
@@ -132,5 +132,25 @@ describe('persistent reminder delivery', () => {
     store.saveSettings({ ...store.getSettings(), recipients: [] });
     queueReminders(store, monday);
     expect(jobs().every((j) => j.status === 'cancelled')).toBe(true);
+  });
+  it('deduplicates 45-day tank reminders and cancels old pending reminders after rotation', () => {
+    store.saveSettings({ ...store.getSettings(), digest: 'off' });
+    const tank = store.create({ ...waterTankInput(), lastRotatedOn: '2026-09-18' });
+    queueReminders(store, new Date('2026-10-25T18:00:00Z'));
+    expect(jobs()).toHaveLength(0);
+    queueReminders(store, monday);
+    queueReminders(store, monday);
+    expect(jobs()).toHaveLength(1);
+    expect(jobs()[0].id).toContain('2026-11-02:7');
+    store.action(tank.id, tank.version, 'rotate_to_hot_tub', {
+      date: '2026-10-26',
+      refilled: true,
+    });
+    queueReminders(store, monday);
+    expect(jobs()[0].status).toBe('cancelled');
+    queueReminders(store, new Date('2026-12-10T18:00:00Z'));
+    queueReminders(store, new Date('2026-12-10T18:00:00Z'));
+    expect(jobs().filter((j) => j.status === 'pending')).toHaveLength(1);
+    expect(jobs().find((j) => j.status === 'pending')?.id).toContain('2026-12-10:0');
   });
 });

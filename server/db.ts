@@ -7,6 +7,7 @@ import {
   settingsSchema,
   stockInputSchema,
   round,
+  calendarDay,
   type StockInput,
   type Stock,
   type Settings,
@@ -53,6 +54,8 @@ export function openStore(dataDir: string) {
     LEFT JOIN food_details f ON f.catalog_id=c.id LEFT JOIN fuel_details u ON u.catalog_id=c.id`;
   function hydrate(row: Row): Stock {
     return {
+      rotationDays: null,
+      rotationDestination: null,
       ...JSON.parse(row.detail as string),
       id: row.id,
       catalogId: row.catalogId,
@@ -91,6 +94,12 @@ export function openStore(dataDir: string) {
     return hydrate(row);
   }
   function references(input: StockInput) {
+    if (
+      input.rotationDestination === 'hot_tub' &&
+      input.lastRotatedOn &&
+      input.lastRotatedOn > calendarDay(new Date(), getSettings().timezone)
+    )
+      throw new AppError(400, 'A completed rotation cannot be in the future');
     if (input.locationId && !db.prepare('SELECT 1 FROM locations WHERE id=?').get(input.locationId))
       throw new AppError(400, 'Location no longer exists');
     if (
@@ -235,6 +244,7 @@ export function openStore(dataDir: string) {
       locationId?: string | null;
       containerId?: string | null;
       note?: string;
+      refilled?: boolean;
     },
   ): Stock {
     return db.transaction(() => {
@@ -251,8 +261,22 @@ export function openStore(dataDir: string) {
         next.quantity = round(before.quantity + (args.amount || 0));
       } else if (actionName === 'correct') next.quantity = args.amount ?? null;
       else if (actionName === 'empty') next.quantity = 0;
-      else if (actionName === 'rotate') {
+      else if (actionName === 'rotate' || actionName === 'rotate_to_hot_tub') {
         if (!args.date) throw new AppError(400, 'A rotation date is required');
+        if (actionName === 'rotate_to_hot_tub') {
+          if (before.category !== 'water' || before.rotationDestination !== 'hot_tub')
+            throw new AppError(400, 'Set up hot tub rotation for this water tank first');
+          if (args.date > calendarDay(new Date(), getSettings().timezone))
+            throw new AppError(400, 'A completed rotation cannot be in the future');
+          if (before.lastRotatedOn && args.date < before.lastRotatedOn)
+            throw new AppError(400, 'Rotation date cannot be before the last recorded rotation');
+          if (args.refilled) {
+            if (!before.capacity)
+              throw new AppError(400, 'Set tank capacity before confirming a full refill');
+            next.quantity = before.capacity;
+          }
+          args.note = `Rotated into hot tub. ${args.refilled ? 'Refilled tank to capacity.' : 'Refill not confirmed; recorded quantity unchanged.'}${args.note ? ` ${args.note}` : ''}`;
+        }
         next.lastRotatedOn = args.date;
         next.rotationOn = null;
       } else if (actionName === 'move') {

@@ -13,6 +13,8 @@ import {
   calculateDashboard,
   effectiveLocationId,
   stockInputSchema,
+  waterTankInput,
+  rotationDate,
   type Stock,
   type Container,
 } from '../shared/model.ts';
@@ -184,8 +186,60 @@ describe('inventory API and persistence', () => {
     const data = (await runtime.app.inject('/api/state')).json();
     expect(data.stocks).toHaveLength(7);
     expect(data.containers).toHaveLength(12);
-    expect(data.dashboard.water.total).toBe(230);
+    expect(data.dashboard.water.total).toBe(30);
     expect(data.stocks.every((s: Stock) => s.lastRotatedOn == null)).toBe(true);
+    const tank = data.stocks.find((s: Stock) => s.packaging === 'tank');
+    expect(tank).toMatchObject({
+      capacity: 300,
+      quantity: null,
+      rotationDays: 45,
+      rotationDestination: 'hot_tub',
+    });
+  });
+  it('records hot tub rotations atomically, refills only when confirmed, and preserves history', async () => {
+    const tank = await create(waterTankInput());
+    const rotate = (version: number, date: string, refilled = false) =>
+      runtime.app.inject({
+        method: 'POST',
+        url: `/api/stocks/${tank.id}/actions`,
+        payload: { version, action: 'rotate_to_hot_tub', date, refilled },
+      });
+    expect((await rotate(1, '2026-02-30')).statusCode).toBe(400);
+    expect((await rotate(1, '2099-01-01')).statusCode).toBe(400);
+    expect(runtime.store.get(tank.id).version).toBe(1);
+    const first = await rotate(1, '2026-01-31');
+    expect(first.statusCode).toBe(200);
+    expect(first.json().quantity).toBeNull();
+    expect(rotationDate(first.json())).toBe('2026-03-17');
+    expect((await rotate(1, '2026-03-17', true)).statusCode).toBe(409);
+    expect((await rotate(2, '2026-01-30', true)).statusCode).toBe(400);
+    const second = await rotate(2, '2026-03-17', true);
+    expect(second.json().quantity).toBe(300);
+    expect(rotationDate(second.json())).toBe('2026-05-01');
+    const history = (await runtime.app.inject(`/api/stocks/${tank.id}/history`)).json();
+    expect(history[0].action).toBe('rotate_to_hot_tub');
+    expect(history[0].note).toContain('Refilled tank to capacity');
+    expect(history[1].note).toContain('recorded quantity unchanged');
+    expect(JSON.parse(history[0].beforeJson).quantity).toBeNull();
+    expect(JSON.parse(history[0].afterJson).lastRotatedOn).toBe('2026-03-17');
+    const third = await rotate(3, '2026-05-01');
+    expect(third.json().quantity).toBe(300);
+    const food = await create();
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'POST',
+          url: `/api/stocks/${food.id}/actions`,
+          payload: { version: 1, action: 'rotate_to_hot_tub', date: '2026-05-01', refilled: true },
+        })
+      ).statusCode,
+    ).toBe(400);
+  });
+  it('does not add a second tank when water setup follows a dedicated tank setup', async () => {
+    await create(waterTankInput());
+    await runtime.app.inject({ method: 'POST', url: '/api/setup', payload: { water: true } });
+    expect(runtime.store.all().filter((s) => s.packaging === 'tank')).toHaveLength(1);
+    expect(runtime.store.all()).toHaveLength(7);
   });
   it('keeps bucket numbers and QR identities permanent, allocates in order, and never reuses numbers', async () => {
     // Adding a bucket before setup must still let the 12-bucket setup finish safely.
@@ -384,7 +438,7 @@ describe('inventory API and persistence', () => {
     expect(new Set(data.stocks.map((s: Stock) => s.category)).size).toBe(5);
     expect(data.containers).toHaveLength(12);
     expect(data.settings.recipients).toEqual([]);
-    expect(data.dashboard.water.total).toBe(230);
+    expect(data.dashboard.water.total).toBe(330);
     const firstCount = data.stocks.length;
     await runtime.app.inject({
       method: 'POST',
