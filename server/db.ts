@@ -46,8 +46,10 @@ export function openStore(dataDir: string) {
       settingsSchema.parse({ appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:5173' }),
     ),
   );
-  db.prepare('INSERT OR IGNORE INTO locations VALUES (?,?)').run('LOC-STORAGE', 'Storage');
-  db.prepare('INSERT OR IGNORE INTO locations VALUES (?,?)').run('LOC-OUTDOORS', 'Outdoors');
+  if (version === 0) {
+    db.prepare('INSERT INTO locations VALUES (?,?)').run('LOC-STORAGE', 'Storage');
+    db.prepare('INSERT INTO locations VALUES (?,?)').run('LOC-OUTDOORS', 'Outdoors');
+  }
   const join = `SELECT s.*, c.id AS catalogId,c.category,c.name,c.brand,c.subcategory,c.description,c.notes,c.photos,
     b.purchased_on,b.best_by,b.expires_on,f.nutrition,u.fuel_type
     FROM stock_units s JOIN purchase_batches b ON b.id=s.batch_id JOIN catalog_items c ON c.id=b.catalog_id
@@ -174,6 +176,30 @@ export function openStore(dataDir: string) {
       const stock = insertUnit(input, batchId);
       log(null, stock, 'create');
       return stock;
+    })();
+  }
+  function remove(stockId: string, version: number) {
+    return db.transaction(() => {
+      const stock = get(stockId);
+      checkVersion(stock, version);
+      db.prepare('DELETE FROM adjustments WHERE stock_id=?').run(stockId);
+      db.prepare('DELETE FROM stock_units WHERE id=?').run(stockId);
+      if (!db.prepare('SELECT 1 FROM stock_units WHERE batch_id=?').get(stock.batchId))
+        db.prepare('DELETE FROM purchase_batches WHERE id=?').run(stock.batchId);
+      if (!db.prepare('SELECT 1 FROM purchase_batches WHERE catalog_id=?').get(stock.catalogId)) {
+        db.prepare('DELETE FROM food_details WHERE catalog_id=?').run(stock.catalogId);
+        db.prepare('DELETE FROM fuel_details WHERE catalog_id=?').run(stock.catalogId);
+        db.prepare('DELETE FROM catalog_items WHERE id=?').run(stock.catalogId);
+      }
+      const prefix = `alert:${stockId}:`;
+      db.prepare('DELETE FROM reminder_outbox WHERE substr(id,1,?)=?').run(prefix.length, prefix);
+      const lowPrefix = `low:${stockId}:`;
+      db.prepare('DELETE FROM meta WHERE substr(key,1,?)=?').run(lowPrefix.length, lowPrefix);
+      // A queued summary contains a snapshot. Cancel it so the scheduler rebuilds it.
+      db.prepare(
+        "UPDATE reminder_outbox SET status='cancelled' WHERE status='pending' AND id LIKE 'digest:%'",
+      ).run();
+      return stock.photoIds;
     })();
   }
   function checkVersion(before: Stock, version: number) {
@@ -382,7 +408,7 @@ export function openStore(dataDir: string) {
       return { ...input, id: containerId, bucketNumber, version: 1 };
     })();
   }
-  function setupBuckets(locationId: string) {
+  function setupBuckets(locationId: string | null) {
     db.transaction(() => {
       const highest = Math.max(0, ...containers().map((c) => c.bucketNumber));
       const saved = Number(
@@ -440,6 +466,7 @@ export function openStore(dataDir: string) {
     setupBuckets,
     log,
     checkVersion,
+    remove,
     reset,
   };
 }

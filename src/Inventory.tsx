@@ -19,6 +19,7 @@ import {
 import { useApp, CoverageCard, PageHeading, type ModalState } from './App';
 import { api, categoryNames, dateLabel, download, number } from './api';
 import { WaterTank } from './WaterTank';
+import { WaterJugsModal } from './WaterJugs';
 import {
   AsyncButton,
   Busy,
@@ -121,17 +122,12 @@ export function Inventory({ category }: { category: Category }) {
                   follows its own interval.
                 </p>
                 <p>Missing last-rotation dates appear in Needs attention.</p>
-                {!state.setup.water && (
-                  <AsyncButton
-                    className="button small secondary"
-                    action={async () => {
-                      await mutate('/api/setup', 'POST', { water: true });
-                      toast('Added six jugs; tank added only if needed');
-                    }}
-                  >
-                    Add six 5-gallon jugs & a tank if needed
-                  </AsyncButton>
-                )}
+                <button
+                  className="button small secondary"
+                  onClick={() => setModal({ type: 'water-jugs' })}
+                >
+                  Add water jugs
+                </button>
               </>
             ) : category === 'dog' ? (
               <>
@@ -223,7 +219,8 @@ function StockTable({
   const [search, setSearch] = useState(''),
     [location, setLocation] = useState(''),
     [subcategory, setSubcategory] = useState(''),
-    [showEmpty, setShowEmpty] = useState(false);
+    [showEmpty, setShowEmpty] = useState(false),
+    [selected, setSelected] = useState<Set<string>>(new Set());
   const categories = [...new Set(stocks.map((s) => s.subcategory).filter(Boolean))].sort();
   const shown = stocks.filter((s) => {
     return (
@@ -235,6 +232,7 @@ function StockTable({
         .includes(search.toLowerCase())
     );
   });
+  const chosen = shown.filter((s) => selected.has(s.id));
   return (
     <section className="panel stock-panel">
       <div className="inventory-toolbar">
@@ -285,6 +283,40 @@ function StockTable({
           </label>
         </span>
       </div>
+      {shown.length > 0 && (
+        <div className="selection-toolbar">
+          <label>
+            <input
+              type="checkbox"
+              aria-label="Select all shown resources"
+              checked={chosen.length === shown.length}
+              onChange={(e) =>
+                setSelected(e.target.checked ? new Set(shown.map((s) => s.id)) : new Set())
+              }
+            />{' '}
+            Select all shown
+          </label>
+          {chosen.length > 0 && (
+            <>
+              <span>{chosen.length} selected</span>
+              {chosen.every((s) => s.category === 'water' && s.packaging === 'jug') && (
+                <button
+                  className="button small secondary"
+                  onClick={() => setModal({ type: 'water-jugs', stocks: chosen })}
+                >
+                  Edit selected jugs
+                </button>
+              )}
+              <button
+                className="button small secondary danger-text"
+                onClick={() => setModal({ type: 'delete-stocks', stocks: chosen })}
+              >
+                <Trash2 size={16} /> Delete selected
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {!shown.length ? (
         <Empty
           title={stocks.length ? 'No matching resources' : 'Your reserve starts here.'}
@@ -319,20 +351,35 @@ function StockTable({
               .sort();
             return (
               <div className="stock-row" key={stock.id}>
-                <button className="stock-name" onClick={() => navigate(`/item/${stock.id}`)}>
-                  {stock.photoIds[0] ? (
-                    <img src={`/uploads/${stock.photoIds[0]}`} alt="" />
-                  ) : (
-                    <CategoryIcon category={stock.category} size={19} />
-                  )}
-                  <span>
-                    <strong>{stock.name}</strong>
-                    <small>
-                      {stock.brand || stock.subcategory || stock.id}
-                      {stock.highPriority && ' · Priority'}
-                    </small>
-                  </span>
-                </button>
+                <div className="stock-name-group">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${stock.name}`}
+                    checked={selected.has(stock.id)}
+                    onChange={(e) =>
+                      setSelected((old) => {
+                        const next = new Set(old);
+                        if (e.target.checked) next.add(stock.id);
+                        else next.delete(stock.id);
+                        return next;
+                      })
+                    }
+                  />
+                  <button className="stock-name" onClick={() => navigate(`/item/${stock.id}`)}>
+                    {stock.photoIds[0] ? (
+                      <img src={`/uploads/${stock.photoIds[0]}`} alt="" />
+                    ) : (
+                      <CategoryIcon category={stock.category} size={19} />
+                    )}
+                    <span>
+                      <strong>{stock.name}</strong>
+                      <small>
+                        {stock.brand || stock.subcategory || stock.id}
+                        {stock.highPriority && ' · Priority'}
+                      </small>
+                    </span>
+                  </button>
+                </div>
                 <div className="quantity-cell">
                   <strong>{stock.quantity == null ? 'Unknown' : number(stock.quantity, 2)}</strong>{' '}
                   {stock.quantity != null && <span>{stock.unit}</span>}
@@ -362,7 +409,7 @@ function StockTable({
 export function StockDetail({ id }: { id: string }) {
   const { state, setModal, navigate, mutate, toast } = useApp();
   const stock = state.stocks.find((s) => s.id === id);
-  const [archiving, setArchiving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   if (!stock)
     return (
       <Empty
@@ -373,7 +420,7 @@ export function StockDetail({ id }: { id: string }) {
           </button>
         }
       >
-        It may have been archived or removed from this inventory.
+        It may have been deleted from this inventory.
       </Empty>
     );
   const alerts = state.dashboard.alerts.filter((a) => a.stockId === id);
@@ -516,28 +563,28 @@ export function StockDetail({ id }: { id: string }) {
               <History size={16} />
               History
             </button>
-            <button className="text-button danger-text" onClick={() => setArchiving(true)}>
+            <button className="text-button danger-text" onClick={() => setDeleting(true)}>
               <Trash2 size={16} />
-              Archive
+              Delete
             </button>
           </div>
-          {archiving && (
+          {deleting && (
             <div className="confirmation">
               <p>
-                Archive this resource? It will leave totals and reminders. Its adjustment history
-                stays in the database.
+                Permanently delete this resource and its adjustment history? It will be removed from
+                totals and reminders. This cannot be undone.
               </p>
               <AsyncButton
                 className="button danger small"
                 action={async () => {
                   await mutate(`/api/stocks/${id}`, 'DELETE', { version: stock.version });
-                  toast('Resource archived');
+                  toast('Resource deleted');
                   navigate(`/${stock.category}`);
                 }}
               >
-                Archive resource
+                Delete resource
               </AsyncButton>
-              <button className="button small secondary" onClick={() => setArchiving(false)}>
+              <button className="button small secondary" onClick={() => setDeleting(false)}>
                 Keep it
               </button>
             </div>
@@ -764,6 +811,10 @@ export function InventoryModal({
   modal: Exclude<ModalState, { type: 'edit' } | null>;
   onClose: () => void;
 }) {
+  if (modal.type === 'water-jugs')
+    return <WaterJugsModal stocks={modal.stocks} onClose={onClose} />;
+  if (modal.type === 'delete-stocks')
+    return <DeleteStocksModal stocks={modal.stocks} onClose={onClose} />;
   if (modal.type === 'labels')
     return <LabelsModal containerIds={modal.containerIds} onClose={onClose} />;
   if (modal.type === 'bag-notes') return <BagNotesModal ids={modal.ids} onClose={onClose} />;
@@ -771,6 +822,41 @@ export function InventoryModal({
   if (modal.type === 'split') return <SplitModal stock={modal.stock} onClose={onClose} />;
   if (modal.type === 'history') return <HistoryModal stock={modal.stock} onClose={onClose} />;
   return <ActionModal stock={modal.stock} onClose={onClose} />;
+}
+function DeleteStocksModal({ stocks, onClose }: { stocks: Stock[]; onClose: () => void }) {
+  const { mutate, toast } = useApp();
+  return (
+    <Modal title={`Delete ${stocks.length} resources?`} onClose={onClose}>
+      <div className="modal-body">
+        <p>
+          Permanently delete these resources and their adjustment history. They will be removed from
+          totals and reminders. This cannot be undone.
+        </p>
+        <ul>
+          {stocks.map((stock) => (
+            <li key={stock.id}>{stock.name}</li>
+          ))}
+        </ul>
+      </div>
+      <footer className="modal-footer">
+        <button className="button secondary" onClick={onClose}>
+          Keep them
+        </button>
+        <AsyncButton
+          className="button danger"
+          action={async () => {
+            await mutate('/api/stocks/delete', 'POST', {
+              items: stocks.map(({ id, version }) => ({ id, version })),
+            });
+            toast('Resources deleted');
+            onClose();
+          }}
+        >
+          Delete resources
+        </AsyncButton>
+      </footer>
+    </Modal>
+  );
 }
 function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
   const { state, mutate, toast } = useApp();
@@ -1275,8 +1361,9 @@ function LabelsModal({ containerIds, onClose }: { containerIds: string[]; onClos
   );
 }
 function ContainerModal({ id, onClose }: { id?: string; onClose: () => void }) {
-  const { state, mutate, toast } = useApp(),
+  const { state, mutate, toast, navigate } = useApp(),
     old = state.containers.find((c) => c.id === id);
+  const [deleting, setDeleting] = useState(false);
   const [name, setName] = useState(old?.name || ''),
     [locationId, setLocation] = useState(old?.locationId || ''),
     [capacity, setCapacity] = useState<number | null>(old?.capacityGallons || 5),
@@ -1315,6 +1402,45 @@ function ContainerModal({ id, onClose }: { id?: string; onClose: () => void }) {
               ? `Permanent bucket number: ${bucketNumberLabel(old)}. This stays with the physical bucket when you move or refill it.`
               : 'A permanent number is assigned when you save. Existing bucket numbers never change.'}
           </p>
+          {old && (
+            <div className="confirmation">
+              {deleting ? (
+                <>
+                  <p>
+                    Delete this bucket? Its resources stay in inventory at the bucket’s current
+                    location, with quantities and reminders unchanged. Its number will not be
+                    reused.
+                  </p>
+                  <AsyncButton
+                    className="button danger small"
+                    action={async () => {
+                      await mutate(`/api/containers/${old.id}`, 'DELETE', { version: old.version });
+                      onClose();
+                      navigate('/containers');
+                      toast('Bucket deleted');
+                    }}
+                  >
+                    Delete bucket permanently
+                  </AsyncButton>
+                  <button
+                    type="button"
+                    className="button small secondary"
+                    onClick={() => setDeleting(false)}
+                  >
+                    Keep bucket
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="text-button danger-text"
+                  onClick={() => setDeleting(true)}
+                >
+                  <Trash2 size={16} /> Delete bucket
+                </button>
+              )}
+            </div>
+          )}
           <Field label="Nickname (optional)">
             <input
               aria-label="Bucket nickname"

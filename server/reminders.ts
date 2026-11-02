@@ -139,12 +139,18 @@ export async function deliverPending(
   sender: MailSender = smtpSend,
   now = new Date(),
 ) {
+  queueReminders(store, now);
   const jobs = store.db
     .prepare(
       "SELECT * FROM reminder_outbox WHERE status='pending' AND next_attempt<=? ORDER BY created_at LIMIT 10",
     )
     .all(now.toISOString()) as MailJob[];
-  for (const job of jobs) {
+  for (const candidate of jobs) {
+    // A request can delete a resource or rebuild a summary while an earlier email is in flight.
+    const job = store.db
+      .prepare("SELECT * FROM reminder_outbox WHERE id=? AND status='pending'")
+      .get(candidate.id) as MailJob | undefined;
+    if (!job) continue;
     try {
       await sender(job);
       store.db

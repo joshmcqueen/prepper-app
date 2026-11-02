@@ -109,6 +109,20 @@ export const stockInputSchema = z
         message: 'Liquid fuel is tracked in gallons',
       });
   });
+// Shared fields for adding several jugs or explicitly applying changes to selected jugs.
+export const jugChangesSchema = z.strictObject({
+  quantity: stockInputSchema.shape.quantity.removeDefault().optional(),
+  capacity: stockInputSchema.shape.capacity.removeDefault().optional(),
+  locationId: stockInputSchema.shape.locationId.removeDefault().optional(),
+  purchasedOn: stockInputSchema.shape.purchasedOn.removeDefault().optional(),
+  bestBy: stockInputSchema.shape.bestBy.removeDefault().optional(),
+  expiresOn: stockInputSchema.shape.expiresOn.removeDefault().optional(),
+  lastRotatedOn: stockInputSchema.shape.lastRotatedOn.removeDefault().optional(),
+  rotationMonths: stockInputSchema.shape.rotationMonths.removeDefault().optional(),
+  notes: stockInputSchema.shape.notes.removeDefault().optional(),
+  notify: stockInputSchema.shape.notify.removeDefault().optional(),
+});
+export type JugChanges = z.infer<typeof jugChangesSchema>;
 export type StockInput = z.infer<typeof stockInputSchema>;
 export type Stock = StockInput & {
   id: string;

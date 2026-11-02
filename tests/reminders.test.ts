@@ -153,4 +153,58 @@ describe('persistent reminder delivery', () => {
     expect(jobs().filter((j) => j.status === 'pending')).toHaveLength(1);
     expect(jobs().find((j) => j.status === 'pending')?.id).toContain('2026-12-10:0');
   });
+  it('skips a deleted resource even if its job was loaded while another email was sending', async () => {
+    store.saveSettings({ ...store.getSettings(), digest: 'off' });
+    const first = add({ name: 'First email' });
+    const second = add({ name: 'Delete before sending' });
+    queueReminders(store, monday);
+    store.db
+      .prepare('UPDATE reminder_outbox SET created_at=? WHERE id LIKE ?')
+      .run(new Date(monday.getTime() - 1000).toISOString(), `alert:${first.id}:%`);
+    const sent: string[] = [];
+    await deliverPending(
+      store,
+      async (job) => {
+        sent.push(job.body);
+        if (sent.length === 1) store.remove(second.id, second.version);
+      },
+      monday,
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('First email');
+    expect(jobs().some((j) => j.id.includes(second.id))).toBe(false);
+  });
+  it('rebuilds a queued summary without the deleted resource', async () => {
+    const item = add();
+    queueReminders(store, monday);
+    expect(jobs().find((j) => j.id.startsWith('digest:'))?.body).toContain(item.name);
+    store.remove(item.id, item.version);
+    queueReminders(store, monday);
+    const digest = jobs().find((j) => j.id.startsWith('digest:'));
+    expect(digest?.status).toBe('pending');
+    expect(digest?.body).not.toContain(item.name);
+    expect(jobs().some((j) => j.id.includes(item.id))).toBe(false);
+  });
+  it('uses rebuilt summary contents if deletion happens during an earlier delivery', async () => {
+    const item = add();
+    queueReminders(store, monday);
+    store.db
+      .prepare('UPDATE reminder_outbox SET created_at=? WHERE id LIKE ?')
+      .run(new Date(monday.getTime() - 1000).toISOString(), `alert:${item.id}:%`);
+    const sent: MailJob[] = [];
+    await deliverPending(
+      store,
+      async (job) => {
+        sent.push(job);
+        if (sent.length === 1) {
+          store.remove(item.id, item.version);
+          queueReminders(store, monday);
+        }
+      },
+      monday,
+    );
+    expect(sent).toHaveLength(2);
+    expect(sent[1].id).toMatch(/^digest:/);
+    expect(sent[1].body).not.toContain(item.name);
+  });
 });

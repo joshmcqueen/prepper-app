@@ -9,6 +9,7 @@ import jsQR from 'jsqr';
 import { buildApp } from '../server/app.ts';
 import { createBackup, restoreBackup } from '../server/backup.ts';
 import { openStore } from '../server/db.ts';
+import { deliverPending, queueReminders } from '../server/reminders.ts';
 import {
   calculateDashboard,
   effectiveLocationId,
@@ -171,6 +172,305 @@ describe('inventory API and persistence', () => {
     runtime.store.update(units[1].id, { ...units[1], name: 'Updated rice' }, 1);
     expect(runtime.store.get(item.id).name).toBe('Updated rice');
     expect(() => runtime.store.action(item.id, 2, 'use', { amount: 1 })).toThrow(/another device/);
+  });
+  it('adds jugs with shared details, keeps unknowns, and validates the entire request', async () => {
+    const response = await runtime.app.inject({
+      method: 'POST',
+      url: '/api/water-jugs',
+      payload: {
+        count: 6,
+        details: {
+          purchasedOn: '2026-10-01',
+          lastRotatedOn: '2026-10-02',
+          locationId: 'LOC-STORAGE',
+          notes: 'Blue jugs',
+          notify: false,
+        },
+      },
+    });
+    expect(response.statusCode).toBe(201);
+    const jugs = response.json() as Stock[];
+    expect(jugs).toHaveLength(6);
+    expect(
+      jugs.every(
+        (s) =>
+          s.purchasedOn === '2026-10-01' &&
+          s.lastRotatedOn === '2026-10-02' &&
+          s.quantity === 5 &&
+          s.capacity === 5 &&
+          s.bestBy === null &&
+          s.notify === false &&
+          s.notes === 'Blue jugs',
+      ),
+    ).toBe(true);
+    expect(calculateDashboard(runtime.store.all(), runtime.store.getSettings()).water.total).toBe(
+      30,
+    );
+    expect(runtime.store.all().some((s) => s.packaging === 'tank')).toBe(false);
+    for (const payload of [
+      { count: 0, details: {} },
+      { count: 1.5, details: {} },
+      { count: 101, details: {} },
+      { count: 3, details: { purchasedOn: '2026-02-31' } },
+      { count: 3, details: { quantity: 6, capacity: 5 } },
+      { count: 3, details: { locationId: 'missing' } },
+    ]) {
+      expect(
+        (await runtime.app.inject({ method: 'POST', url: '/api/water-jugs', payload })).statusCode,
+      ).toBe(400);
+      expect(runtime.store.all()).toHaveLength(6);
+    }
+  });
+  it('bulk edits only chosen jug fields and rolls back on conflicts or invalid amounts', async () => {
+    const first = await create(
+      stockInputSchema.parse({
+        category: 'water',
+        packaging: 'jug',
+        name: 'First jug',
+        unit: 'gallon',
+        quantity: 4,
+        capacity: 5,
+        purchasedOn: '2026-01-01',
+        notes: 'Keep first',
+      }),
+    );
+    const second = await create(
+      stockInputSchema.parse({
+        category: 'water',
+        packaging: 'jug',
+        name: 'Second jug',
+        unit: 'gallon',
+        quantity: null,
+        capacity: 10,
+        purchasedOn: '2026-02-01',
+        notes: 'Keep second',
+        notify: false,
+      }),
+    );
+    const items = [first, second].map(({ id, version }) => ({ id, version }));
+    const edit = (changes: unknown, selection = items) =>
+      runtime.app.inject({
+        method: 'PUT',
+        url: '/api/water-jugs',
+        payload: { items: selection, changes },
+      });
+    expect((await edit({ capacity: 2 })).statusCode).toBe(400);
+    expect(runtime.store.get(first.id).version).toBe(1);
+    expect(
+      (await edit({ lastRotatedOn: '2026-10-20' }, [items[0], { ...items[1], version: 2 }]))
+        .statusCode,
+    ).toBe(409);
+    expect(runtime.store.get(first.id).lastRotatedOn).toBeNull();
+    expect((await edit({ lastRotatedOn: '2026-10-20', rotationMonths: 6 })).statusCode).toBe(200);
+    expect(runtime.store.get(first.id)).toMatchObject({
+      quantity: 4,
+      capacity: 5,
+      purchasedOn: '2026-01-01',
+      notes: 'Keep first',
+      notify: true,
+      lastRotatedOn: '2026-10-20',
+      rotationMonths: 6,
+    });
+    expect(runtime.store.get(second.id)).toMatchObject({
+      quantity: null,
+      capacity: 10,
+      purchasedOn: '2026-02-01',
+      notes: 'Keep second',
+      notify: false,
+      lastRotatedOn: '2026-10-20',
+      rotationMonths: 6,
+    });
+    expect((await edit({ purchasedOn: null }, [{ id: first.id, version: 2 }])).statusCode).toBe(
+      200,
+    );
+    expect(runtime.store.get(first.id).purchasedOn).toBeNull();
+    expect((await edit({})).statusCode).toBe(400);
+    const food = await create();
+    expect(
+      (await edit({ notes: 'wrong' }, [{ id: food.id, version: food.version }])).statusCode,
+    ).toBe(400);
+  });
+  it('permanently deletes records and unshared photos while preserving sibling bags', async () => {
+    const photo = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.webp';
+    await fs.writeFile(path.join(runtime.store.dataDir, 'uploads', photo), 'test');
+    const first = await create({ ...rice(), photoIds: [photo] });
+    const [original, bag] = runtime.store.split(first.id, first.version, [
+      { quantity: 8, containerId: null, packaging: 'mylar_1' },
+    ]);
+    const remove = (stock: Stock) =>
+      runtime.app.inject({
+        method: 'DELETE',
+        url: `/api/stocks/${stock.id}`,
+        payload: { version: stock.version },
+      });
+    expect((await remove(first)).statusCode).toBe(409);
+    expect((await remove(original)).statusCode).toBe(200);
+    expect((await runtime.app.inject(`/api/stocks/${first.id}`)).statusCode).toBe(404);
+    expect(
+      runtime.store.db.prepare('SELECT 1 FROM stock_units WHERE id=?').get(first.id),
+    ).toBeUndefined();
+    expect(
+      runtime.store.db.prepare('SELECT 1 FROM adjustments WHERE stock_id=?').get(first.id),
+    ).toBeUndefined();
+    expect(runtime.store.get(bag.id).quantity).toBe(8);
+    await expect(
+      fs.access(path.join(runtime.store.dataDir, 'uploads', photo)),
+    ).resolves.toBeUndefined();
+    expect((await remove(bag)).statusCode).toBe(200);
+    for (const table of [
+      'stock_units',
+      'adjustments',
+      'purchase_batches',
+      'catalog_items',
+      'food_details',
+    ])
+      expect(runtime.store.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).toEqual({
+        n: 0,
+      });
+    await expect(fs.access(path.join(runtime.store.dataDir, 'uploads', photo))).rejects.toThrow();
+  });
+  it('bulk deletion is atomic and immediately removes queued item emails and stale summaries', async () => {
+    const now = new Date();
+    runtime.store.saveSettings({
+      ...runtime.store.getSettings(),
+      recipients: ['test@example.invalid'],
+      digest: 'off',
+    });
+    const first = await create({
+      ...rice(),
+      name: 'Delete this rice',
+      expiresOn: now.toISOString().slice(0, 10),
+    });
+    const second = await create({ ...rice(), name: 'Keep this rice' });
+    queueReminders(runtime.store, now);
+    expect(runtime.store.db.prepare('SELECT count(*) AS n FROM reminder_outbox').get()).toEqual({
+      n: 1,
+    });
+    runtime.store.db
+      .prepare(
+        'INSERT INTO reminder_outbox(id,subject,body,recipients,next_attempt,created_at) VALUES (?,?,?,?,?,?)',
+      )
+      .run(
+        'digest:weekly:old',
+        'Old summary',
+        'Delete this rice',
+        '[]',
+        now.toISOString(),
+        now.toISOString(),
+      );
+    const remove = (items: unknown) =>
+      runtime.app.inject({ method: 'POST', url: '/api/stocks/delete', payload: { items } });
+    expect(
+      (
+        await remove([
+          { id: first.id, version: first.version },
+          { id: second.id, version: 2 },
+        ])
+      ).statusCode,
+    ).toBe(409);
+    expect(runtime.store.all()).toHaveLength(2);
+    expect((await remove([{ id: first.id, version: first.version }])).statusCode).toBe(200);
+    expect(runtime.store.all().map((s) => s.id)).toEqual([second.id]);
+    const sent: string[] = [];
+    await deliverPending(
+      runtime.store,
+      async (job) => {
+        sent.push(job.body);
+      },
+      now,
+    );
+    expect(sent).toEqual([]);
+    expect(
+      runtime.store.db
+        .prepare('SELECT id FROM reminder_outbox WHERE id LIKE ?')
+        .all(`alert:${first.id}:%`),
+    ).toEqual([]);
+    expect((await runtime.app.inject(`/api/stocks/${first.id}/history`)).statusCode).toBe(404);
+    expect(
+      calculateDashboard(runtime.store.all(), runtime.store.getSettings(), now).alerts.some(
+        (a) => a.stockId === first.id,
+      ),
+    ).toBe(false);
+  });
+  it('deletes storage without losing quantities, rejects stale edits, and never reuses bucket numbers', async () => {
+    const bucket = runtime.store.createContainer({
+      name: 'Delete bucket',
+      locationId: 'LOC-STORAGE',
+      capacityGallons: 5,
+    });
+    const stock = await create({ ...rice(), containerId: bucket.id, locationId: 'LOC-OUTDOORS' });
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'DELETE',
+          url: `/api/containers/${bucket.id}`,
+          payload: { version: 2 },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'DELETE',
+          url: `/api/containers/${bucket.id}`,
+          payload: { version: bucket.version },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(runtime.store.get(stock.id)).toMatchObject({
+      containerId: null,
+      locationId: 'LOC-STORAGE',
+      quantity: 20,
+      version: 2,
+    });
+    const next = runtime.store.createContainer({
+      name: 'Next',
+      locationId: 'LOC-STORAGE',
+      capacityGallons: 5,
+    });
+    expect(next.bucketNumber).toBe(bucket.bucketNumber + 1);
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'DELETE',
+          url: '/api/locations/LOC-STORAGE',
+          payload: { name: 'Stale name' },
+        })
+      ).statusCode,
+    ).toBe(409);
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'DELETE',
+          url: '/api/locations/LOC-STORAGE',
+          payload: { name: 'Storage' },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(runtime.store.get(stock.id)).toMatchObject({
+      locationId: null,
+      quantity: 20,
+      version: 3,
+    });
+    expect(runtime.store.containers()[0]).toMatchObject({ locationId: null, version: 2 });
+    const reopened = openStore(runtime.store.dataDir);
+    expect(reopened.locations().some((l) => l.id === 'LOC-STORAGE')).toBe(false);
+    reopened.db.close();
+    expect(
+      (
+        await runtime.app.inject({
+          method: 'POST',
+          url: '/api/setup',
+          payload: { water: true, buckets: true },
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      runtime.store
+        .all()
+        .filter((s) => s.packaging === 'jug')
+        .every((s) => s.locationId === null),
+    ).toBe(true);
   });
   it('makes water/bucket setup idempotent and leaves dates unknown', async () => {
     for (let i = 0; i < 2; i++)

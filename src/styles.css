@@ -3078,3 +3078,66 @@
 .bucket-controls {
   margin-bottom: 20px;
 }
+
+@layer components {
+  .selection-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 22px;
+  }
+  .selection-toolbar label,
+  .bulk-apply {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .stock-name-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+  .stock-name-group .stock-name {
+    min-width: 0;
+    flex: 1;
+  }
+  .jug-field fieldset {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+  .jug-field fieldset:disabled {
+    opacity: 0.5;
+  }
+  .bulk-apply {
+    margin-bottom: 8px;
+  }
+  .jug-field {
+    min-width: 0;
+    margin-bottom: 12px;
+  }
+  .water-jugs-form .form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  @media (max-width: 700px) {
+    .stock-row .stock-name-group {
+      grid-column: 1;
+      grid-row: 1;
+    }
+  }
+}
+
+@layer responsive {
+  @media (max-width: 600px) {
+    .water-jugs-form .form-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .selection-toolbar {
+      padding: 12px 14px;
+    }
+  }
+}

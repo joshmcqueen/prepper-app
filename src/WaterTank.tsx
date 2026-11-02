@@ -282,7 +282,10 @@ function TankDialog({
           action={async () => {
             if (mode === 'setup') {
               const input = {
-                ...(stock || waterTankInput()),
+                ...(stock || {
+                  ...waterTankInput(),
+                  locationId: state.locations.find((l) => l.id === 'LOC-OUTDOORS')?.id ?? null,
+                }),
                 capacity: 300,
                 quantity,
                 rotationDays: 45,

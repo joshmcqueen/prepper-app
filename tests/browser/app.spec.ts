@@ -545,3 +545,146 @@ test('configures an existing tank for 45 days without duplicating water', async 
     rotationMonths: null,
   });
 });
+
+test('adds jugs with shared details, bulk edits existing jugs, and deletes a selection', async ({
+  page,
+  request,
+}) => {
+  await request.post('/api/database/reset', { data: { mode: 'empty', confirmation: 'RESET' } });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Add water jugs', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByRole('spinbutton', { name: 'Number of jugs', exact: true }).fill('6');
+  await dialog.getByLabel('Purchase date', { exact: true }).fill('2026-10-01');
+  await dialog.getByLabel('Last filled / rotated date', { exact: true }).fill('2026-10-02');
+  await dialog.getByLabel('Jug notes', { exact: true }).fill('Shared blue jugs');
+  await page.route('**/api/water-jugs', (route) =>
+    route.fulfill({ status: 503, json: { error: 'Temporary failure' } }),
+  );
+  await dialog.getByRole('button', { name: 'Add jugs', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Temporary failure');
+  await expect(dialog.getByLabel('Purchase date', { exact: true })).toHaveValue('2026-10-01');
+  await page.unroute('**/api/water-jugs');
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-add-jugs.png`,
+    fullPage: true,
+  });
+  await dialog.getByRole('button', { name: 'Add jugs', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  let state = await (await request.get('/api/state')).json();
+  expect(state.stocks).toHaveLength(6);
+  expect(
+    state.stocks.every(
+      (s: any) =>
+        s.purchasedOn === '2026-10-01' &&
+        s.lastRotatedOn === '2026-10-02' &&
+        s.notes === 'Shared blue jugs' &&
+        s.bestBy === null,
+    ),
+  ).toBe(true);
+  expect(state.dashboard.water.total).toBe(30);
+  await page.goto('/water');
+  await page.getByRole('checkbox', { name: 'Select all shown resources', exact: true }).check();
+  await page.getByRole('button', { name: 'Edit selected jugs', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await expect(dialog.getByLabel('Gallons in each jug', { exact: true })).toBeDisabled();
+  await dialog
+    .getByRole('checkbox', { name: 'Change Last filled / rotated date', exact: true })
+    .check();
+  await dialog.getByLabel('Last filled / rotated date', { exact: true }).fill('2026-10-20');
+  const changed = state.stocks[1];
+  await request.put(`/api/stocks/${changed.id}`, { data: { ...changed, quantity: 3 } });
+  await dialog.getByRole('button', { name: 'Save jug details', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('another device');
+  await expect(dialog.getByLabel('Last filled / rotated date', { exact: true })).toHaveValue(
+    '2026-10-20',
+  );
+  state = await (await request.get('/api/state')).json();
+  expect(state.stocks.every((s: any) => s.lastRotatedOn === '2026-10-02')).toBe(true);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.reload();
+  await page.getByRole('checkbox', { name: 'Select all shown resources', exact: true }).check();
+  await page.getByRole('button', { name: 'Edit selected jugs', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog
+    .getByRole('checkbox', { name: 'Change Last filled / rotated date', exact: true })
+    .check();
+  await dialog.getByLabel('Last filled / rotated date', { exact: true }).fill('2026-10-20');
+  expect((await new AxeBuilder({ page }).include('dialog').analyze()).violations).toEqual([]);
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-edit-jugs.png`,
+    fullPage: true,
+  });
+  await dialog.getByRole('button', { name: 'Save jug details', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  state = await (await request.get('/api/state')).json();
+  expect(
+    state.stocks.every(
+      (s: any) => s.lastRotatedOn === '2026-10-20' && s.purchasedOn === '2026-10-01',
+    ),
+  ).toBe(true);
+  expect(state.stocks.find((s: any) => s.id === changed.id).quantity).toBe(3);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole('button', { name: 'Delete selected', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Keep them', exact: true }).click();
+  expect((await (await request.get('/api/state')).json()).stocks).toHaveLength(6);
+  await page.getByRole('button', { name: 'Delete selected', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Delete resources', exact: true })
+    .click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(
+    page.getByRole('heading', { name: 'Your reserve starts here.', exact: true }),
+  ).toBeVisible();
+  state = await (await request.get('/api/state')).json();
+  expect(state.stocks).toHaveLength(0);
+  expect(state.dashboard.water.total).toBe(0);
+  await page.getByRole('button', { name: 'Add water jugs', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
+
+test('deletes a resource, bucket, and location with clear consequences', async ({
+  page,
+  request,
+}) => {
+  let state = await (await request.get('/api/state')).json();
+  const jug = state.stocks.find((s: any) => s.packaging === 'jug');
+  await page.goto(`/item/${jug.id}`);
+  await expect(page.getByRole('button', { name: /archive/i })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('button', { name: 'Keep it', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete resource', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Resource deleted');
+  expect((await request.get(`/api/stocks/${jug.id}`)).status()).toBe(404);
+  const contents = state.stocks.filter((s: any) => s.containerId === 'BK-01');
+  const bucket = state.containers.find((c: any) => c.id === 'BK-01');
+  await page.goto('/container/BK-01');
+  await page.getByRole('button', { name: 'Edit bucket', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete bucket', exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('resources stay in inventory');
+  await page.getByRole('button', { name: 'Delete bucket permanently', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  state = await (await request.get('/api/state')).json();
+  expect(state.containers.some((c: any) => c.id === 'BK-01')).toBe(false);
+  for (const stock of contents) {
+    const saved = state.stocks.find((s: any) => s.id === stock.id);
+    expect(saved.quantity).toBe(stock.quantity);
+    expect(saved.containerId).toBeNull();
+    expect(saved.locationId).toBe(bucket.locationId);
+  }
+  const location = state.locations.find((l: any) => l.id === bucket.locationId);
+  await page.goto('/settings#storage');
+  await page.getByRole('button', { name: `Delete location ${location.name}`, exact: true }).click();
+  await expect(page.getByRole('dialog')).toContainText('no location assigned');
+  await page.getByRole('button', { name: 'Delete location permanently', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  state = await (await request.get('/api/state')).json();
+  expect(state.locations.some((l: any) => l.id === location.id)).toBe(false);
+  for (const stock of contents)
+    expect(state.stocks.find((s: any) => s.id === stock.id).locationId).toBeNull();
+});

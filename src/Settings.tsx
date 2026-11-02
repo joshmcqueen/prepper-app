@@ -636,6 +636,7 @@ export function SettingsPage() {
 function LocationRow({ location }: { location: Location }) {
   const { mutate, toast } = useApp();
   const [name, setName] = useState(location.name);
+  const [deleting, setDeleting] = useState(false);
   return (
     <div className="location-row">
       <MapPin size={17} />
@@ -654,6 +655,38 @@ function LocationRow({ location }: { location: Location }) {
       >
         <Check size={18} />
       </AsyncButton>
+      <button
+        type="button"
+        className="icon-button danger-text"
+        aria-label={`Delete location ${location.name}`}
+        onClick={() => setDeleting(true)}
+      >
+        <Trash2 size={17} />
+      </button>
+      {deleting && (
+        <Modal title={`Delete ${location.name}?`} onClose={() => setDeleting(false)}>
+          <div className="modal-body">
+            <p>
+              Delete this location? Its resources and buckets stay in inventory with no location
+              assigned. Quantities and reminders stay unchanged.
+            </p>
+          </div>
+          <footer className="modal-footer">
+            <button type="button" className="button secondary" onClick={() => setDeleting(false)}>
+              Keep location
+            </button>
+            <AsyncButton
+              className="button danger"
+              action={async () => {
+                await mutate(`/api/locations/${location.id}`, 'DELETE', { name: location.name });
+                toast('Location deleted');
+              }}
+            >
+              Delete location permanently
+            </AsyncButton>
+          </footer>
+        </Modal>
+      )}
     </div>
   );
 }

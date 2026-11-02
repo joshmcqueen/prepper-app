@@ -31,6 +31,8 @@ export type ModalState =
   | { type: 'labels'; containerIds: string[] }
   | { type: 'bag-notes'; ids: string[] }
   | { type: 'container'; id?: string }
+  | { type: 'water-jugs'; stocks?: Stock[] }
+  | { type: 'delete-stocks'; stocks: Stock[] }
   | null;
 type Context = {
   state: AppState;
@@ -515,21 +517,14 @@ function DashboardPage() {
               <span className="step-number">02</span>
               <div>
                 <strong>Bring in your water reserve</strong>
-                <p>Six 5-gallon jugs + your outdoor 200-gallon tank.</p>
+                <p>Add several jugs with shared dates and details.</p>
               </div>
-              {state.setup.water ? (
-                <Check className="sage" size={20} />
-              ) : (
-                <AsyncButton
-                  className="button small secondary"
-                  action={async () => {
-                    await mutate('/api/setup', 'POST', { water: true });
-                    toast('Added 230 gallons. Add rotation dates after checking your water.');
-                  }}
-                >
-                  Confirm & add
-                </AsyncButton>
-              )}
+              <button
+                className="button small secondary"
+                onClick={() => setModal({ type: 'water-jugs' })}
+              >
+                Add water jugs
+              </button>
             </div>
             <div>
               <span className="step-number">03</span>

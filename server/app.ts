@@ -8,6 +8,7 @@ import sharp from 'sharp';
 import { z, ZodError } from 'zod';
 import {
   stockInputSchema,
+  jugChangesSchema,
   settingsSchema,
   calculateDashboard,
   waterTankInput,
@@ -17,7 +18,7 @@ import { AppError, id, openStore, type Store } from './db.ts';
 import { containerLabel, labelExcel, labelPdf, labelPng } from './labels.ts';
 import { extractDraft, transcribe } from './ai.ts';
 import { createBackup } from './backup.ts';
-import { smtpConfigured, smtpSend } from './reminders.ts';
+import { queueReminders, smtpConfigured, smtpSend } from './reminders.ts';
 import { seedDemo } from './seed.ts';
 
 const identity = z.string().min(1).max(100);
@@ -112,16 +113,99 @@ export async function buildApp(options: {
       version,
     );
   });
+  const selectionSchema = z
+    .array(z.object({ id: identity, version: versionSchema }))
+    .min(1)
+    .max(100)
+    .refine(
+      (items) => new Set(items.map((item) => item.id)).size === items.length,
+      'Select each item only once',
+    );
+  const deleteStocks = (items: z.infer<typeof selectionSchema>) => {
+    const photos = store.db.transaction(() =>
+      items.flatMap((item) => store.remove(item.id, item.version)),
+    )();
+    // Split bags and duplicates may share photos. Only remove files with no remaining owner.
+    const used = new Set(
+      (store.db.prepare('SELECT photos FROM catalog_items').all() as { photos: string }[]).flatMap(
+        (row) => JSON.parse(row.photos) as string[],
+      ),
+    );
+    for (const photo of new Set(photos))
+      if (!used.has(photo)) fs.rmSync(path.join(store.dataDir, 'uploads', photo), { force: true });
+    queueReminders(store);
+    return { ok: true };
+  };
   app.delete('/api/stocks/:id', async (req) => {
     const { version } = z.object({ version: versionSchema }).parse(req.body);
+    return deleteStocks([{ id: paramsSchema.parse(req.params).id, version }]);
+  });
+  app.post('/api/stocks/delete', async (req) => {
+    const { items } = z.object({ items: selectionSchema }).parse(req.body);
+    return deleteStocks(items);
+  });
+  app.post('/api/water-jugs', async (req, reply) => {
+    const { count, details } = z
+      .object({ count: z.number().int().min(1).max(100), details: jugChangesSchema })
+      .parse(req.body);
+    const saved = store.db.transaction(() => {
+      const start = Math.max(
+        0,
+        ...store
+          .all()
+          .filter((s) => s.category === 'water' && s.packaging === 'jug')
+          .map((s) => Number(/^(?:Water jug|Sealed water jug) (\d+)$/.exec(s.name)?.[1] || 0)),
+      );
+      return Array.from({ length: count }, (_, i) =>
+        store.create(
+          stockInputSchema.parse({
+            category: 'water',
+            name: `Water jug ${start + i + 1}`,
+            unit: 'gallon',
+            packaging: 'jug',
+            quantity: 5,
+            capacity: 5,
+            rotationMonths: 12,
+            ...details,
+          }),
+        ),
+      );
+    })();
+    store.db.prepare("INSERT OR IGNORE INTO meta VALUES ('setup_water','1')").run();
+    return reply.code(201).send(saved);
+  });
+  app.put('/api/water-jugs', async (req) => {
+    const { items, changes } = z
+      .object({
+        items: selectionSchema,
+        changes: jugChangesSchema.refine(
+          (v) => Object.keys(v).length > 0,
+          'Choose at least one detail to change',
+        ),
+      })
+      .parse(req.body);
     return store.db.transaction(() => {
-      const stock = store.get(paramsSchema.parse(req.params).id);
-      store.checkVersion(stock, version);
-      store.log(stock, stock, 'archive');
-      store.db
-        .prepare('UPDATE stock_units SET archived=1,version=version+1 WHERE id=?')
-        .run(stock.id);
-      return { ok: true };
+      const stocks = items.map((item) => {
+        const stock = store.get(item.id);
+        store.checkVersion(stock, item.version);
+        if (stock.category !== 'water' || stock.packaging !== 'jug')
+          throw new AppError(400, 'Select water jugs only');
+        return stock;
+      });
+      return stocks.map((stock) =>
+        store.update(
+          stock.id,
+          stockInputSchema.parse({
+            ...stock,
+            ...changes,
+            ...(Object.hasOwn(changes, 'lastRotatedOn') || Object.hasOwn(changes, 'rotationMonths')
+              ? { rotationOn: null }
+              : {}),
+            ...(Object.hasOwn(changes, 'rotationMonths') ? { rotationDays: null } : {}),
+          }),
+          stock.version,
+        ),
+      );
     })();
   });
   app.post('/api/stocks/:id/actions', async (req) => {
@@ -211,6 +295,26 @@ export async function buildApp(options: {
     store.db.prepare('UPDATE locations SET name=? WHERE id=?').run(name, locationId);
     return { id: locationId, name };
   });
+  app.delete('/api/locations/:id', async (req) => {
+    const locationId = paramsSchema.parse(req.params).id;
+    const { name } = z.object({ name: z.string() }).parse(req.body);
+    return store.db.transaction(() => {
+      const old = store.locations().find((l) => l.id === locationId);
+      if (!old) throw new AppError(404, 'Location not found');
+      if (old.name !== name)
+        throw new AppError(409, 'This location changed. Reload before deleting.');
+      store.db
+        .prepare(
+          'UPDATE stock_units SET location_id=NULL,version=version+1,updated_at=? WHERE location_id=?',
+        )
+        .run(new Date().toISOString(), locationId);
+      store.db
+        .prepare('UPDATE containers SET location_id=NULL,version=version+1 WHERE location_id=?')
+        .run(locationId);
+      store.db.prepare('DELETE FROM locations WHERE id=?').run(locationId);
+      return { ok: true };
+    })();
+  });
   const containerSchema = z.object({
     bucketNumber: z.never().optional(),
     name: z.string().trim().max(100).default(''),
@@ -237,6 +341,23 @@ export async function buildApp(options: {
       .run(c.name, c.locationId, c.capacityGallons, containerId);
     return { ...c, id: containerId, bucketNumber: old.bucketNumber, version: c.version + 1 };
   });
+  app.delete('/api/containers/:id', async (req) => {
+    const containerId = paramsSchema.parse(req.params).id;
+    const { version } = z.object({ version: versionSchema }).parse(req.body);
+    return store.db.transaction(() => {
+      const old = store.containers().find((c) => c.id === containerId);
+      if (!old) throw new AppError(404, 'Bucket not found');
+      if (old.version !== version)
+        throw new AppError(409, 'This bucket changed. Reload before deleting.');
+      store.db
+        .prepare(
+          'UPDATE stock_units SET container_id=NULL,location_id=?,version=version+1,updated_at=? WHERE container_id=?',
+        )
+        .run(old.locationId, new Date().toISOString(), containerId);
+      store.db.prepare('DELETE FROM containers WHERE id=?').run(containerId);
+      return { ok: true };
+    })();
+  });
   app.post('/api/setup', async (req) => {
     const { water, buckets } = z
       .object({ water: z.boolean().default(false), buckets: z.boolean().default(false) })
@@ -253,15 +374,24 @@ export async function buildApp(options: {
               unit: 'gallon',
               packaging: 'jug',
               rotationMonths: 12,
-              locationId: 'LOC-STORAGE',
+              locationId: store.locations().some((l) => l.id === 'LOC-STORAGE')
+                ? 'LOC-STORAGE'
+                : null,
             }),
           );
         if (!store.all().some((s) => s.category === 'water' && s.packaging === 'tank'))
-          store.create(waterTankInput());
+          store.create({
+            ...waterTankInput(),
+            locationId: store.locations().some((l) => l.id === 'LOC-OUTDOORS')
+              ? 'LOC-OUTDOORS'
+              : null,
+          });
         store.db.prepare("INSERT INTO meta VALUES ('setup_water','1')").run();
       }
       if (buckets && !store.db.prepare("SELECT 1 FROM meta WHERE key='setup_buckets'").get()) {
-        store.setupBuckets('LOC-STORAGE');
+        store.setupBuckets(
+          store.locations().some((l) => l.id === 'LOC-STORAGE') ? 'LOC-STORAGE' : null,
+        );
         store.db.prepare("INSERT INTO meta VALUES ('setup_buckets','1')").run();
       }
       return { ok: true };
