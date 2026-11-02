@@ -26,9 +26,10 @@ import { StockEditor } from './StockEditor';
 import { SettingsPage } from './Settings';
 
 export type ModalState =
-  | { type: 'edit'; category: Category; stock?: Stock; duplicate?: boolean }
+  | { type: 'edit'; category: Category; stock?: Stock; duplicate?: boolean; containerId?: string }
   | { type: 'action' | 'split' | 'history'; stock: Stock }
-  | { type: 'labels'; ids: string[]; containerIds?: string[] }
+  | { type: 'labels'; containerIds: string[] }
+  | { type: 'bag-notes'; ids: string[] }
   | { type: 'container'; id?: string }
   | null;
 type Context = {
@@ -286,6 +287,7 @@ export function App() {
             category={modal.category}
             stock={modal.stock}
             duplicate={modal.duplicate}
+            containerId={modal.containerId}
             onClose={() => setModal(null)}
           />
         ) : (
@@ -533,7 +535,10 @@ function DashboardPage() {
               <span className="step-number">03</span>
               <div>
                 <strong>Give your buckets a home</strong>
-                <p>Set up 12 empty buckets, ready for labeled bags.</p>
+                <p>
+                  Set up 12 numbered buckets. Write bag details with a Sharpie and scan each bucket
+                  for its contents.
+                </p>
               </div>
               {state.setup.buckets ? (
                 <Check className="sage" size={20} />

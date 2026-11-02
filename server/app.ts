@@ -14,7 +14,7 @@ import {
   type Settings,
 } from '../shared/model.ts';
 import { AppError, id, openStore, type Store } from './db.ts';
-import { containerLabel, labelExcel, labelPdf, labelPng, stockLabel } from './labels.ts';
+import { containerLabel, labelExcel, labelPdf, labelPng } from './labels.ts';
 import { extractDraft, transcribe } from './ai.ts';
 import { createBackup } from './backup.ts';
 import { smtpConfigured, smtpSend } from './reminders.ts';
@@ -321,46 +321,34 @@ export async function buildApp(options: {
     }
   });
   app.get('/api/labels/preview', async (req, reply) => {
-    const q = z
-      .object({ stockId: identity.optional(), containerId: identity.optional() })
-      .parse(req.query);
+    const q = z.strictObject({ containerId: identity }).parse(req.query);
     const settings = store.getSettings();
     const container = store.containers().find((c) => c.id === q.containerId);
-    const label = q.stockId
-      ? stockLabel(store.get(q.stockId), settings)
-      : container
-        ? containerLabel(container, settings)
-        : null;
-    if (!label) throw new AppError(404, 'Label item not found');
+    if (!container) throw new AppError(404, 'Bucket not found');
+    const label = containerLabel(container, settings);
     reply.header('Cache-Control', 'no-store');
     return reply.type('image/png').send(await labelPng(label, settings));
   });
   app.post('/api/labels/export', async (req, reply) => {
     const body = z
-      .object({
-        ids: z.array(identity).max(100).default([]),
-        containerIds: z.array(identity).max(100).default([]),
+      .strictObject({
+        containerIds: z.array(identity).min(1).max(100),
         format: z.enum(['png', 'pdf', 'xlsx']),
       })
       .parse(req.body);
-    if (
-      body.ids.length + body.containerIds.length < 1 ||
-      body.ids.length + body.containerIds.length > 100
-    )
-      throw new AppError(400, 'Select between 1 and 100 labels');
     const settings = store.getSettings();
     const containers = store.containers();
-    const labels = [
-      ...body.ids.map((stockId) => stockLabel(store.get(stockId), settings)),
-      ...body.containerIds.map((cId) => {
-        const c = containers.find((c) => c.id === cId);
-        if (!c) throw new AppError(404, 'Container not found');
-        return containerLabel(c, settings);
-      }),
-    ];
+    const labels = [...new Set(body.containerIds)].map((cId) => {
+      const c = containers.find((c) => c.id === cId);
+      if (!c) throw new AppError(404, 'Bucket not found');
+      return containerLabel(c, settings);
+    });
     if (body.format === 'png' && labels.length !== 1)
       throw new AppError(400, 'Select one label for an individual PNG export');
-    reply.header('Content-Disposition', `attachment; filename="haven-labels.${body.format}"`);
+    reply.header(
+      'Content-Disposition',
+      `attachment; filename="haven-bucket-labels.${body.format}"`,
+    );
     if (body.format === 'png')
       return reply.type('image/png').send(await labelPng(labels[0], settings));
     if (body.format === 'pdf')

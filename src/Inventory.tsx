@@ -212,17 +212,18 @@ function StockTable({
   stocks,
   defaultCategory = 'food',
   showLocationFilter = true,
+  containerId,
 }: {
   stocks: Stock[];
   defaultCategory?: Category;
   showLocationFilter?: boolean;
+  containerId?: string;
 }) {
   const { state, navigate, setModal } = useApp();
   const [search, setSearch] = useState(''),
     [location, setLocation] = useState(''),
     [subcategory, setSubcategory] = useState(''),
-    [showEmpty, setShowEmpty] = useState(false),
-    [selected, setSelected] = useState<Set<string>>(new Set());
+    [showEmpty, setShowEmpty] = useState(false);
   const categories = [...new Set(stocks.map((s) => s.subcategory).filter(Boolean))].sort();
   const shown = stocks.filter((s) => {
     return (
@@ -234,7 +235,6 @@ function StockTable({
         .includes(search.toLowerCase())
     );
   });
-  const selectedIds = stocks.filter((s) => selected.has(s.id)).map((s) => s.id);
   return (
     <section className="panel stock-panel">
       <div className="inventory-toolbar">
@@ -284,14 +284,6 @@ function StockTable({
             Show empty
           </label>
         </span>
-        <button
-          className="text-button"
-          disabled={!selectedIds.length}
-          onClick={() => setModal({ type: 'labels', ids: selectedIds })}
-        >
-          <Printer size={16} />
-          Labels{selectedIds.length ? ` (${selectedIds.length})` : ''}
-        </button>
       </div>
       {!shown.length ? (
         <Empty
@@ -300,7 +292,7 @@ function StockTable({
             !stocks.length && (
               <button
                 className="button secondary"
-                onClick={() => setModal({ type: 'edit', category: defaultCategory })}
+                onClick={() => setModal({ type: 'edit', category: defaultCategory, containerId })}
               >
                 <Plus size={17} />
                 Add your first resource
@@ -315,22 +307,6 @@ function StockTable({
       ) : (
         <div className="stock-list">
           <div className="stock-head">
-            <label>
-              <input
-                type="checkbox"
-                aria-label="Select all visible items"
-                checked={shown.length > 0 && shown.every((s) => selected.has(s.id))}
-                onChange={(e) =>
-                  setSelected((current) => {
-                    const next = new Set(current);
-                    for (const s of shown)
-                      if (e.target.checked) next.add(s.id);
-                      else next.delete(s.id);
-                    return next;
-                  })
-                }
-              />
-            </label>
             <span>RESOURCE</span>
             <span>REMAINING</span>
             <span>STORAGE</span>
@@ -343,19 +319,6 @@ function StockTable({
               .sort();
             return (
               <div className="stock-row" key={stock.id}>
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${stock.name} ${stock.id}`}
-                  checked={selected.has(stock.id)}
-                  onChange={(e) =>
-                    setSelected((current) => {
-                      const next = new Set(current);
-                      if (e.target.checked) next.add(stock.id);
-                      else next.delete(stock.id);
-                      return next;
-                    })
-                  }
-                />
                 <button className="stock-name" onClick={() => navigate(`/item/${stock.id}`)}>
                   {stock.photoIds[0] ? (
                     <img src={`/uploads/${stock.photoIds[0]}`} alt="" />
@@ -461,14 +424,8 @@ export function StockDetail({ id }: { id: string }) {
                 Split into bags
               </button>
             )}
-            <button
-              className="button secondary"
-              onClick={() => setModal({ type: 'labels', ids: [stock.id] })}
-            >
-              <Printer size={17} />
-              Make label
-            </button>
           </div>
+          {['food', 'dog'].includes(stock.category) && <BagNotes stock={stock} />}
           <dl className="detail-facts">
             <div>
               <dt>Storage</dt>
@@ -634,7 +591,7 @@ export function StockDetail({ id }: { id: string }) {
   );
 }
 export function ContainersPage({ containerId }: { containerId?: string }) {
-  const { state, setModal, navigate } = useApp();
+  const { state, setModal, navigate, reload } = useApp();
   const [locationId, setLocationId] = useState('');
   const container = state.containers.find((c) => c.id === containerId);
   if (containerId && !container)
@@ -664,21 +621,34 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
             </button>
           }
         />
-        <div className="button-row">
+        <div className="button-row wrap bucket-controls">
+          <button
+            className="button"
+            onClick={() => setModal({ type: 'edit', category: 'food', containerId: container.id })}
+          >
+            <Plus size={17} />
+            Add bag to bucket
+          </button>
+          <AsyncButton className="button secondary" action={reload}>
+            Refresh contents
+          </AsyncButton>
           <button
             className="button secondary"
-            onClick={() => setModal({ type: 'labels', ids: [], containerIds: [container.id] })}
+            onClick={() => setModal({ type: 'labels', containerIds: [container.id] })}
           >
             <Printer size={17} />
             Make bucket label
           </button>
           <span className="subtle">
-            Permanent number {bucketNumberLabel(container)} · Contents update as you move bags.
+            Permanent number {bucketNumberLabel(container)} · This QR link always opens this
+            bucket’s current contents.
           </span>
         </div>
         <StockTable
+          key={container.id}
           stocks={state.stocks.filter((s) => s.containerId === container.id)}
           showLocationFilter={false}
+          containerId={container.id}
         />
       </>
     );
@@ -697,7 +667,7 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
       <PageHeading
         eyebrow="A PLACE FOR EVERYTHING"
         title="Storage & buckets"
-        description="Find supplies across your garage, attic, closets, and anywhere else. Buckets keep their numbers wherever they go."
+        description="Write the food name, amount, and known dates on each bag with a Sharpie. Label each bucket once with its number and QR code to see what’s inside."
         action={
           <button className="button" onClick={() => setModal({ type: 'container' })}>
             <Plus size={18} />
@@ -724,9 +694,7 @@ export function ContainersPage({ containerId }: { containerId?: string }) {
         <button
           className="button secondary"
           disabled={!buckets.length}
-          onClick={() =>
-            setModal({ type: 'labels', ids: [], containerIds: buckets.map((c) => c.id) })
-          }
+          onClick={() => setModal({ type: 'labels', containerIds: buckets.map((c) => c.id) })}
         >
           <Printer size={17} />
           Bucket labels
@@ -797,9 +765,8 @@ export function InventoryModal({
   onClose: () => void;
 }) {
   if (modal.type === 'labels')
-    return (
-      <LabelsModal ids={modal.ids} containerIds={modal.containerIds || []} onClose={onClose} />
-    );
+    return <LabelsModal containerIds={modal.containerIds} onClose={onClose} />;
+  if (modal.type === 'bag-notes') return <BagNotesModal ids={modal.ids} onClose={onClose} />;
   if (modal.type === 'container') return <ContainerModal id={modal.id} onClose={onClose} />;
   if (modal.type === 'split') return <SplitModal stock={modal.stock} onClose={onClose} />;
   if (modal.type === 'history') return <HistoryModal stock={modal.stock} onClose={onClose} />;
@@ -970,7 +937,7 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
     [parts, setParts] = useState(() =>
       Array.from({ length: 2 }, () => ({
         quantity: stock.quantity == null ? null : stock.quantity / 2,
-        containerId: '',
+        containerId: stock.containerId || '',
         packaging: 'mylar_1' as StockInput['packaging'],
       })),
     ),
@@ -995,7 +962,7 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
             });
             await reload();
             onClose();
-            setModal({ type: 'labels', ids: saved.slice(1).map((s) => s.id) });
+            setModal({ type: 'bag-notes', ids: saved.slice(1).map((s) => s.id) });
             toast('Batch divided without changing your reserve total');
           } catch (err) {
             setError((err as Error).message);
@@ -1007,7 +974,7 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
         <div className="modal-body">
           <p className="footnote">
             Bags inherit this batch’s dates and nutrition. Gallon sizes describe packaging, not food
-            weight.
+            weight. Write key facts on each bag with a Sharpie; only buckets need printed QR labels.
           </p>
           <Field label="Number of bags">
             <input
@@ -1123,7 +1090,7 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
             ) : (
               <>
                 <Split size={17} />
-                Split & make labels
+                Split into bags
               </>
             )}
           </button>
@@ -1132,40 +1099,85 @@ function SplitModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
     </Modal>
   );
 }
-function LabelsModal({
-  ids,
-  containerIds,
-  onClose,
-}: {
-  ids: string[];
-  containerIds: string[];
-  onClose: () => void;
-}) {
+function BagNotes({ stock }: { stock: Stock }) {
+  return (
+    <section className="bag-notes" aria-label={`Sharpie notes for ${stock.name}`}>
+      <h3>Write on the bag</h3>
+      <p className="bag-handwriting">
+        <strong>{stock.name}</strong>
+        <span>
+          {stock.quantity == null
+            ? 'Amount not recorded'
+            : `${number(stock.quantity, 6)} ${stock.unit}`}
+        </span>
+        {stock.purchasedOn && <span>Purchased {dateLabel(stock.purchasedOn)}</span>}
+        {stock.bestBy && <span>Best by {dateLabel(stock.bestBy)}</span>}
+        {stock.expiresOn && <span>Expires {dateLabel(stock.expiresOn)}</span>}
+      </p>
+      <p className="footnote">
+        Use a Sharpie. Add only the facts you know; the bucket carries the QR code.
+      </p>
+    </section>
+  );
+}
+function BagNotesModal({ ids, onClose }: { ids: string[]; onClose: () => void }) {
+  const { state, navigate } = useApp();
+  const bags = ids
+    .map((id) => state.stocks.find((s) => s.id === id))
+    .filter((s): s is Stock => !!s);
+  return (
+    <Modal
+      title="Bags ready for your Sharpie"
+      subtitle="Write these key facts before putting each bag into its bucket."
+      onClose={onClose}
+    >
+      <div className="modal-body">
+        {bags.map((stock, i) => (
+          <div key={stock.id}>
+            <h2>
+              Bag {i + 1} ·{' '}
+              {state.containers.find((c) => c.id === stock.containerId)
+                ? bucketName(state.containers.find((c) => c.id === stock.containerId)!)
+                : 'No bucket assigned'}
+            </h2>
+            <BagNotes stock={stock} />
+            <button
+              className="text-button"
+              onClick={() => {
+                onClose();
+                navigate(`/item/${stock.id}`);
+              }}
+            >
+              View bag details <ArrowRight size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <footer className="modal-footer">
+        <button className="button" onClick={onClose}>
+          Done
+        </button>
+      </footer>
+    </Modal>
+  );
+}
+function LabelsModal({ containerIds, onClose }: { containerIds: string[]; onClose: () => void }) {
   const { state } = useApp();
-  const all = [
-    ...ids.map((id) => ({
-      id,
-      name: state.stocks.find((s) => s.id === id)?.name || id,
-      container: false,
-    })),
-    ...containerIds.map((id) => ({
-      id,
-      name: state.containers.find((c) => c.id === id)
-        ? bucketName(state.containers.find((c) => c.id === id)!)
-        : id,
-      container: true,
-    })),
-  ];
+  const all = containerIds.map((id) => ({
+    id,
+    name: state.containers.find((c) => c.id === id)
+      ? bucketName(state.containers.find((c) => c.id === id)!)
+      : id,
+  }));
   const [selected, setSelected] = useState(new Set(all.map((l) => l.id))),
     [preview, setPreview] = useState(all[0]);
   const body = {
-    ids: ids.filter((id) => selected.has(id)),
     containerIds: containerIds.filter((id) => selected.has(id)),
   };
   return (
     <Modal
-      title="Labels for your reserve"
-      subtitle="Phomemo M110 · review, export, then print in Print Master."
+      title="Bucket numbers & QR labels"
+      subtitle="One permanent label per bucket. Scan to see current contents without opening it."
       onClose={onClose}
       wide
     >
@@ -1202,8 +1214,17 @@ function LabelsModal({
           </div>
           <p className="footnote">
             QR links use {state.settings.appBaseUrl}. Set a stable home-network address in Settings
-            before printing permanent labels.
+            before printing permanent labels. Your phone must be on the same network, with Haven
+            running.
           </p>
+          {['localhost', '127.0.0.1', '[::1]', '0.0.0.0'].includes(
+            new URL(state.settings.appBaseUrl).hostname,
+          ) && (
+            <p className="footnote" role="alert">
+              This QR address points to this device. Set a phone-reachable address in Settings
+              before printing.
+            </p>
+          )}
           <p className="footnote">
             Excel exports contain plain text and QR URLs, up to 100 records. In Print Master, map
             the URL column to a QR-code field. PNG exports are for one selected label.
@@ -1213,7 +1234,7 @@ function LabelsModal({
           {preview && (
             <img
               alt="Label preview"
-              src={`/api/labels/preview?${preview.container ? 'containerId' : 'stockId'}=${encodeURIComponent(preview.id)}`}
+              src={`/api/labels/preview?containerId=${encodeURIComponent(preview.id)}`}
             />
           )}
           <span>Preview · actual print size follows Settings</span>
@@ -1224,7 +1245,7 @@ function LabelsModal({
           className="button secondary"
           disabled={selected.size !== 1}
           action={() =>
-            download('/api/labels/export', 'haven-label.png', { ...body, format: 'png' })
+            download('/api/labels/export', 'haven-bucket-label.png', { ...body, format: 'png' })
           }
         >
           <Download size={16} />
@@ -1234,7 +1255,7 @@ function LabelsModal({
           className="button secondary"
           disabled={selected.size < 1 || selected.size > 100}
           action={() =>
-            download('/api/labels/export', 'haven-labels.xlsx', { ...body, format: 'xlsx' })
+            download('/api/labels/export', 'haven-bucket-labels.xlsx', { ...body, format: 'xlsx' })
           }
         >
           <Download size={16} />
@@ -1243,7 +1264,7 @@ function LabelsModal({
         <AsyncButton
           disabled={selected.size < 1 || selected.size > 100}
           action={() =>
-            download('/api/labels/export', 'haven-labels.pdf', { ...body, format: 'pdf' })
+            download('/api/labels/export', 'haven-bucket-labels.pdf', { ...body, format: 'pdf' })
           }
         >
           <Printer size={16} />

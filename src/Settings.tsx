@@ -101,7 +101,7 @@ export function SettingsPage() {
             ['equipment', 'Fuel'],
             ['notifications', 'Email'],
             ['storage', 'Storage'],
-            ['labels', 'Labels'],
+            ['labels', 'Bucket labels'],
             ['backup', 'Backup'],
             ['database', 'Reset'],
           ].map(([id, label]) => (
@@ -467,8 +467,12 @@ export function SettingsPage() {
           </div>
         </section>
         <section className="panel settings-section" id="labels">
-          <span className="eyebrow">A LABEL NOW, LESS GUESSING LATER</span>
-          <h2>Phomemo M110 labels</h2>
+          <span className="eyebrow">SCAN THE BUCKET. SEE WHAT’S INSIDE.</span>
+          <h2>Bucket numbers & QR codes</h2>
+          <p>
+            Write key facts on bags with a Sharpie. Print one permanent number and QR label for each
+            bucket.
+          </p>
           <div className="form-grid">
             {numeric(
               'labelWidth',
@@ -498,9 +502,10 @@ export function SettingsPage() {
             Use this browser’s address
           </button>
           <p className="footnote">
-            Small labels use a compact name, ID, and QR layout. Use 50 × 80 mm to include quantities
-            and dates. Export PNG, PDF, or plain-data Excel batches from inventory. Use Print Master
-            for your M110; direct browser Bluetooth printing is not included.
+            Bucket labels show a permanent number and a QR code linked to live contents. Export PNG,
+            PDF, or Excel batches from Storage & buckets, then print with Print Master for your
+            M110. Contents and dates stay in the app, so refilling a bucket does not require a new
+            label. Keep Haven running and connect your phone to the same home network to scan.
           </p>
         </section>
         <section className="panel settings-section" id="backup">

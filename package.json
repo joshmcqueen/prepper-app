@@ -13,6 +13,7 @@
     "start": "node --import tsx server/index.ts",
     "test": "vitest run",
     "test:browser": "playwright test",
+    "test:container": "tsx scripts/container-smoke.ts",
     "check": "tsc --noEmit",
     "backup:restore": "tsx server/restore.ts",
     "format": "prettier --write .",
@@ -37,6 +38,7 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "sharp": "^0.35.5",
+    "tsx": "^4.23.15",
     "unzipper": "^0.12.5",
     "zod": "^4.6.7"
   },
@@ -55,7 +57,6 @@
     "concurrently": "^10.0.6",
     "jsqr": "^1.4.0",
     "prettier": "^3.9.10",
-    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"

@@ -1,0 +1,21 @@
+# Allow only build inputs. Local credentials, inventory, certificates, and Git history stay out.
+**
+!Dockerfile
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!index.html
+!tsconfig.json
+!vite.config.ts
+!src/
+!src/**
+!server/
+!server/**
+!shared/
+!shared/**
+!prompts/
+!prompts/**
+!scripts/
+!scripts/**
+!tests/
+!tests/**

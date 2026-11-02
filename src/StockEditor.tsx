@@ -48,11 +48,13 @@ export function StockEditor({
   category,
   stock,
   duplicate,
+  containerId,
   onClose,
 }: {
   category: Category;
   stock?: Stock;
   duplicate?: boolean;
+  containerId?: string;
   onClose: () => void;
 }) {
   const { state, reload, toast, navigate, mutate } = useApp();
@@ -64,7 +66,9 @@ export function StockEditor({
             name: 'New resource',
             category,
             unit: category === 'water' ? 'gallon' : category === 'supplies' ? 'count' : 'lb',
-            locationId: 'LOC-STORAGE',
+            locationId: containerId ? null : 'LOC-STORAGE',
+            containerId: containerId || null,
+            packaging: containerId ? 'mylar_1' : 'original',
           }),
           name: '',
         },

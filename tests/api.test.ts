@@ -356,9 +356,15 @@ describe('inventory API and persistence', () => {
     expect(effectiveLocationId(bag, unknown.containers)).toBeNull();
     expect(effectiveLocationId(standalone, unknown.containers)).toBe(closet.id);
   });
-  it('exports correctly sized PNG/PDF labels and plain Excel batches', async () => {
-    const item = await create();
-    const payload = { ids: [item.id] };
+  it('exports only bucket labels as correctly sized PNG/PDF and numbered Excel batches', async () => {
+    const bucket = (
+      await runtime.app.inject({
+        method: 'POST',
+        url: '/api/containers',
+        payload: { name: 'Breakfast', locationId: null, capacityGallons: 5 },
+      })
+    ).json<Container>();
+    const payload = { containerIds: [bucket.id] };
     const png = await runtime.app.inject({
       method: 'POST',
       url: '/api/labels/export',
@@ -375,7 +381,7 @@ describe('inventory API and persistence', () => {
       .toBuffer({ resolveWithObject: true });
     expect(
       jsQR(new Uint8ClampedArray(decoded.data), decoded.info.width, decoded.info.height)?.data,
-    ).toContain(`/item/${item.id}`);
+    ).toContain(`/container/${bucket.id}`);
     const pdf = await runtime.app.inject({
       method: 'POST',
       url: '/api/labels/export',
@@ -391,13 +397,33 @@ describe('inventory API and persistence', () => {
     });
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(xlsx.rawPayload as never);
-    expect(book.worksheets[0].getCell('H2').value).toContain(`/item/${item.id}`);
+    expect(book.worksheets[0].getCell('A2').value).toBe('01');
+    expect(book.worksheets[0].getCell('E2').value).toContain(`/container/${bucket.id}`);
     const tooMany = await runtime.app.inject({
       method: 'POST',
       url: '/api/labels/export',
-      payload: { ids: Array(101).fill(item.id), format: 'xlsx' },
+      payload: { containerIds: Array(101).fill(bucket.id), format: 'xlsx' },
     });
     expect(tooMany.statusCode).toBe(400);
+  });
+  it('rejects resource-label requests, unknown buckets, and empty label exports', async () => {
+    const item = await create();
+    for (const query of [`stockId=${item.id}`, 'containerId=missing', '']) {
+      const response = await runtime.app.inject(`/api/labels/preview?${query}`);
+      expect(response.statusCode).toBe(query === 'containerId=missing' ? 404 : 400);
+    }
+    for (const payload of [
+      { ids: [item.id], format: 'png' },
+      { containerIds: [], format: 'pdf' },
+      { containerIds: ['missing'], format: 'pdf' },
+    ]) {
+      const response = await runtime.app.inject({
+        method: 'POST',
+        url: '/api/labels/export',
+        payload,
+      });
+      expect(response.statusCode).toBe(payload.containerIds?.[0] === 'missing' ? 404 : 400);
+    }
   });
   it('restores an actual database snapshot and photos', async () => {
     const photo = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.webp';

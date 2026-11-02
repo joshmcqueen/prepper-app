@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test';
+import sharp from 'sharp';
+import jsQR from 'jsqr';
 import AxeBuilder from '@axe-core/playwright';
 import { addDays, calendarDay } from '../../shared/model';
 test.beforeEach(async ({ request }) => {
@@ -7,7 +9,7 @@ test.beforeEach(async ({ request }) => {
   });
   expect(r.ok()).toBe(true);
 });
-test('sample dashboard, inventory editing, manual use, and label preview', async ({ page }) => {
+test('sample dashboard, inventory editing, manual use, and Sharpie reference', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
@@ -33,10 +35,11 @@ test('sample dashboard, inventory editing, manual use, and label preview', async
   await page.getByRole('dialog').getByRole('spinbutton', { name: 'Action amount' }).fill('2');
   await page.getByRole('button', { name: 'Save update', exact: true }).click();
   await expect(page.locator('.detail-hero strong')).toHaveText('8');
-  await page.getByRole('button', { name: 'Make label', exact: true }).click();
-  await expect(page.getByAltText('Label preview')).toBeVisible();
-  await page.getByAltText('Label preview').evaluate((img: HTMLImageElement) => img.decode());
-  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Make label', exact: true })).toHaveCount(0);
+  const notes = page.getByRole('region', { name: 'Sharpie notes for Browser test rice' });
+  await expect(notes).toContainText('8 lb');
+  await expect(notes).not.toContainText('Best by');
+  await expect(notes).not.toContainText('Purchased');
   await page.getByRole('button', { name: 'Edit resource', exact: true }).click();
   await page
     .getByRole('textbox', { name: 'Resource name', exact: true })
@@ -180,9 +183,19 @@ test('splitting and moving bags keeps the total quantity and nutrition', async (
   await page.goto(`/item/${item.id}`);
   await page.getByRole('button', { name: 'Split into bags', exact: true }).click();
   await page.getByRole('combobox', { name: 'Bag 1 bucket', exact: true }).selectOption('BK-10');
-  await page.getByRole('button', { name: 'Split & make labels', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Labels for your reserve' })).toBeVisible();
-  await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Split into bags', exact: true })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Bags ready for your Sharpie' })).toBeVisible();
+  await expect(page.getByRole('dialog')).toContainText('12.5 lb');
+  await expect(page.getByRole('dialog')).toContainText('Bag 1 · Bucket 10');
+  await expect(page.getByAltText('Label preview')).toHaveCount(0);
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-bag-notes.png`,
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
   const after = await (await request.get('/api/state')).json();
   expect(after.dashboard.food.total).toBeCloseTo(before.dashboard.food.total);
   const child = after.stocks.find(
@@ -290,6 +303,82 @@ test('permanent bucket labels and browsing locations include bags and standalone
     .getByRole('combobox', { name: 'Browse storage location' })
     .selectOption('__unassigned');
   await expect(page.getByRole('heading', { name: 'Bucket 13', exact: true })).toBeVisible();
+});
+
+test('bucket QR opens live contents and new bags inherit the bucket without guessed facts', async ({
+  page,
+  request,
+}) => {
+  const before = await (await request.get('/api/state')).json();
+  const label = await request.get('/api/labels/preview?containerId=BK-10');
+  expect(label.ok()).toBe(true);
+  const pixels = await sharp(await label.body())
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const qr = jsQR(new Uint8ClampedArray(pixels.data), pixels.info.width, pixels.info.height);
+  expect(qr?.data).toBe(`${before.settings.appBaseUrl}/container/BK-10`);
+  const bucketPath = new URL(qr!.data).pathname;
+  await page.goto(bucketPath);
+  await expect(page.getByRole('heading', { name: 'Bucket 10', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Labels/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add bag to bucket', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('combobox', { name: 'Bucket', exact: true })).toHaveValue('BK-10');
+  await dialog.getByRole('textbox', { name: 'Resource name', exact: true }).fill('Sharpie lentils');
+  await dialog.getByRole('button', { name: 'Add to inventory', exact: true }).click();
+  await expect(
+    page.getByRole('region', { name: 'Sharpie notes for Sharpie lentils' }),
+  ).toContainText('Amount not recorded');
+  await expect(page.locator('.detail-facts').first()).toContainText('Bucket 10');
+  const saved = await (await request.get('/api/state')).json();
+  const bag = saved.stocks.find((s: { name: string }) => s.name === 'Sharpie lentils');
+  expect(bag).toMatchObject({
+    containerId: 'BK-10',
+    quantity: null,
+    bestBy: null,
+    purchasedOn: null,
+  });
+  expect(saved.dashboard.food.total).toBe(before.dashboard.food.total);
+  await page.goto(bucketPath);
+  await expect(page.getByRole('button', { name: /^Sharpie lentils/ })).toBeVisible();
+  const updated = await request.put(`/api/stocks/${bag.id}`, {
+    data: { ...bag, quantity: 3, bestBy: '2030-10-28' },
+  });
+  expect(updated.ok()).toBe(true);
+  await page.getByRole('button', { name: 'Refresh contents', exact: true }).click();
+  const row = page
+    .locator('.stock-row')
+    .filter({ has: page.getByRole('button', { name: /^Sharpie lentils/ }) });
+  await expect(row.locator('.quantity-cell')).toContainText('3');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(
+    accessibility.violations
+      .filter((v) => ['critical', 'serious'].includes(v.impact || ''))
+      .map((v) => v.id),
+  ).toEqual([]);
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-bucket-contents.png`,
+    fullPage: true,
+  });
+  const moved = await request.post(`/api/stocks/${bag.id}/actions`, {
+    data: {
+      version: (await updated.json()).version,
+      action: 'move',
+      containerId: 'BK-11',
+      locationId: null,
+    },
+  });
+  expect(moved.ok()).toBe(true);
+  await page.getByRole('button', { name: 'Refresh contents', exact: true }).click();
+  await expect(page.getByRole('button', { name: /^Sharpie lentils/ })).toHaveCount(0);
+  await page.goto('/container/BK-11');
+  await expect(page.getByRole('button', { name: /^Sharpie lentils/ })).toBeVisible();
+  const sameLabel = await request.get('/api/labels/preview?containerId=BK-10');
+  expect(await sameLabel.body()).toEqual(await label.body());
 });
 
 test('tank setup, hot tub rotation, refill confirmation, and conflict recovery', async ({

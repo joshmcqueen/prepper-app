@@ -21,7 +21,13 @@ pnpm build
 pnpm start
 ```
 
-Then open [localhost:3001](http://localhost:3001). Update the app address in Settings before making QR labels. Docker/Dokploy packaging and S3 scheduling are deferred.
+Then open [localhost:3001](http://localhost:3001). Update the app address in Settings before making QR labels.
+
+## Docker and Dokploy
+
+Use the included multi-stage `Dockerfile` and `docker-compose.yml`. The image runs Node 24 as a non-root user, serves the built frontend and API on port **3001**, and has an HTTP healthcheck. The named volume at **`/data`** persists SQLite and photos across redeployments. Local credentials and inventory stay out of the build.
+
+See [Docker / Dokploy deployment instructions](docs/dokploy.md) for environment variables, HTTPS routing, backups, and moving existing inventory. Haven has no login, so keep it behind private network access or a reverse-proxy access gate. S3 scheduling remains deferred.
 
 ## Sample data and fresh starts
 
@@ -87,17 +93,19 @@ APP_BASE_URL=https://YOUR-MAC.local:5173
 
 Install **only the public root certificate** from `mkcert -CAROOT` on your iPhone/iPad and enable full trust in iOS Certificate Trust Settings. Keep the CA private key on the Mac. Restart `pnpm dev`, visit the HTTPS address, and grant microphone permission. Alternatively, use an existing trusted HTTPS reverse proxy later. Keyboard dictation and manual notes remain fallbacks.
 
-## M110 label workflow
+## Sharpie bags and bucket QR labels
 
-Default labels are **50 × 80 mm at 203 dpi**. Set your actual roll dimensions in Settings. Labels narrower than 35 mm or shorter than 40 mm use a compact name, ID, and QR layout; use 50 × 80 mm for quantities and dates. Set a stable LAN app address before printing; `localhost` QR links will not reach your computer from another device.
+Write the food name, amount, and any known purchase/best-by/expiration dates on each bag with a Sharpie. Food details include a **Write on the bag** reference; splitting a batch shows the facts and destination bucket for each new bag. Missing amounts or dates remain unknown. There are no individual bag/resource QR labels.
 
-Select resources in an inventory list, use **Labels**, or make a label from an individual resource. Bucket labels are available from Storage & buckets. QR codes use stable unit or bucket IDs. Bucket labels feature a large permanent number; their links always show current contents; printed quantities and dates on food labels are snapshots and need reprinting after relevant edits.
+Use **Storage & buckets → Bucket labels**, or **Make bucket label** inside one bucket. Each label has the bucket’s permanent number and a QR code. Scanning opens that bucket’s current contents, including amounts and recorded dates, without opening the lid. Moves, usage, and refills update the app; the same bucket label keeps working. **Add bag to bucket** starts a resource with that bucket already selected. Use **Refresh contents** to reload changes made on another device.
 
-- **PNG:** one selected label, ready to import as an image into Print Master.
-- **PDF:** one accurately sized page per label for a supported desktop/print workflow. Disable fit-to-page scaling.
-- **Excel batch:** up to 100 rows, first row headers, plain text with no formulas, merged cells, or embedded images. Import the first worksheet through Print Master’s Excel batch workflow. Map **QR URL** to a QR-code element in your saved template. Print Master version and hardware behavior need confirmation on the physical M110.
+Default labels are **50 × 80 mm at 203 dpi**. Set your actual roll dimensions in Settings; small rolls use a compact bucket number and QR layout. Set a stable LAN app address before printing. `localhost` QR links point to the scanning device, so use your computer’s LAN hostname/IP instead. Haven must be running and your phone must be on the same home network. Try opening that address on your phone before printing.
 
-The app does not directly control Bluetooth or AirPrint. Thermal label longevity depends on the media and storage conditions; readable names and stable IDs remain on labels alongside the QR code.
+- **PNG:** one selected bucket label, ready to import as an image into Print Master.
+- **PDF:** one accurately sized page per bucket label. Disable fit-to-page scaling.
+- **Excel batch:** up to 100 bucket labels with Bucket number, ID, Name, Capacity, and QR URL columns. Import the first worksheet in Print Master and map **Bucket number** to a large text element and **QR URL** to a QR-code element. Print Master version and hardware behavior need confirmation on the physical M110.
+
+The app does not directly control Bluetooth or AirPrint. Thermal label longevity depends on media and storage conditions. Bucket numbers remain readable alongside the QR code; the permanent printed label does not contain a changing contents list.
 
 ## Email
 

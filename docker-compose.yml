@@ -1,0 +1,30 @@
+services:
+  haven:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: '3001'
+      DATA_DIR: /data
+      APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL to the full HTTPS address of Haven}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+      OPENAI_TRANSCRIBE_MODEL: ${OPENAI_TRANSCRIBE_MODEL:-gpt-transcribe}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    expose:
+      - '3001'
+    volumes:
+      - haven-data:/data
+
+volumes:
+  haven-data:
