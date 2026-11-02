@@ -33,14 +33,14 @@ async function start() {
     '--name',
     name,
     '--publish',
-    '127.0.0.1::3001',
+    '127.0.0.1::3000',
     '--mount',
     `type=volume,source=${volume},target=/data`,
     '--env',
     `APP_BASE_URL=${appBaseUrl}`,
     image,
   );
-  const port = docker('port', name, '3001/tcp').split(':').at(-1);
+  const port = docker('port', name, '3000/tcp').split(':').at(-1);
   baseUrl = `http://127.0.0.1:${port}`;
   await ready();
 }

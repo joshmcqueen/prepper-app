@@ -12,7 +12,7 @@ cp .env.example .env
 pnpm dev
 ```
 
-Open [localhost:5173](http://localhost:5173). The API runs on port 3001. Vite proxies API and photo requests, so the frontend and API appear under one browser origin. For another device, use the network address printed by Vite. The Node computer must stay running.
+Open [localhost:5173](http://localhost:5173). The API runs on port 3000. Vite proxies API and photo requests, so the frontend and API appear under one browser origin. For another device, use the network address printed by Vite. The Node computer must stay running.
 
 For a single-process local build:
 
@@ -21,11 +21,11 @@ pnpm build
 pnpm start
 ```
 
-Then open [localhost:3001](http://localhost:3001). Update the app address in Settings before making QR labels.
+Then open [localhost:3000](http://localhost:3000). Update the app address in Settings before making QR labels.
 
 ## Docker and Dokploy
 
-Use the included multi-stage `Dockerfile` and `docker-compose.yml`. The image runs Node 24 as a non-root user, serves the built frontend and API on port **3001**, and has an HTTP healthcheck. The named volume at **`/data`** persists SQLite and photos across redeployments. Local credentials and inventory stay out of the build.
+Use the included multi-stage `Dockerfile` and `docker-compose.yml`. The image runs Node 24 as a non-root user, serves the built frontend and API on port **3000**, and has an HTTP healthcheck. The named volume at **`/data`** persists SQLite and photos across redeployments. Local credentials and inventory stay out of the build.
 
 See [Docker / Dokploy deployment instructions](docs/dokploy.md) for environment variables, HTTPS routing, backups, and moving existing inventory. Haven has no login, so keep it behind private network access or a reverse-proxy access gate. S3 scheduling remains deferred.
 

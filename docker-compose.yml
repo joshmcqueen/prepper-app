@@ -9,7 +9,7 @@ services:
     environment:
       NODE_ENV: production
       HOST: 0.0.0.0
-      PORT: '3001'
+      PORT: '3000'
       DATA_DIR: /data
       APP_BASE_URL: ${APP_BASE_URL:?Set APP_BASE_URL to the full HTTPS address of Haven}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -22,7 +22,7 @@ services:
       SMTP_PASS: ${SMTP_PASS:-}
       SMTP_FROM: ${SMTP_FROM:-}
     expose:
-      - '3001'
+      - '3000'
     volumes:
       - haven-data:/data
 

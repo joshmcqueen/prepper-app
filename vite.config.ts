@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
       proxy: Object.fromEntries(
         ['/api', '/uploads'].map((path) => [
           path,
-          { target: `${https ? 'https' : 'http'}://localhost:${env.PORT || 3001}`, secure: false },
+          { target: `${https ? 'https' : 'http'}://localhost:${env.PORT || 3000}`, secure: false },
         ]),
       ),
     },

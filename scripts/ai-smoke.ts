@@ -5,7 +5,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import OpenAI from 'openai';
 
-const base = `http${process.env.TLS_CERT ? 's' : ''}://localhost:${process.env.PORT || 3001}`;
+const base = `http${process.env.TLS_CERT ? 's' : ''}://localhost:${process.env.PORT || 3000}`;
 async function post(route: string, body: unknown) {
   const response = await fetch(`${base}${route}`, {
     method: 'POST',

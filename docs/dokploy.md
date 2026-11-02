@@ -25,7 +25,7 @@ Haven has no login: anyone who can reach it can read/change inventory, download 
 
    Use the full browser origin, without a path or trailing slash. Empty credentials leave integrations unavailable. Compose explicitly passes these values into the container; Dokploy's environment editor supplies the interpolation values. Credentials are runtime values and never build arguments.
 
-4. In **Domains**, add your hostname and route it to service **`haven`**, container port **`3001`**, path **`/`**. Enable HTTPS and your certificate provider. Let Dokploy terminate TLS; leave `TLS_CERT` and `TLS_KEY` unset in the container. No host port needs publishing: Dokploy routes to the service internally.
+4. In **Domains**, add your hostname and route it to service **`haven`**, container port **`3000`**, path **`/`**. Enable HTTPS and your certificate provider. Let Dokploy terminate TLS; leave `TLS_CERT` and `TLS_KEY` unset in the container. No host port needs publishing: Dokploy routes to the service internally.
 5. Deploy, then visit `/api/health` on the configured address; it should return `{"ok":true}`. Check the dashboard and Settings. A fresh volume starts **empty**; sample inventory is only loaded by the explicit action in Settings.
 6. In Settings, confirm **App address** matches your deployed URL before making bucket QR labels or sending reminders. `APP_BASE_URL` initializes fresh/reset settings; changing the environment does not overwrite an address already saved in SQLite. Configure the household timezone and email recipients explicitly.
 
@@ -79,10 +79,10 @@ To run the image locally:
 
 ```sh
 docker run --detach --name haven --init --restart unless-stopped \
-  --publish 127.0.0.1:3001:3001 \
+  --publish 127.0.0.1:3000:3000 \
   --mount type=volume,source=haven-local-data,target=/data \
-  --env APP_BASE_URL=http://localhost:3001 \
+  --env APP_BASE_URL=http://localhost:3000 \
   prepper-app:local
 ```
 
-Open [localhost:3001](http://localhost:3001). Optional credentials can be passed with additional `--env` arguments. Stop this instance with `docker stop haven`; the named volume persists.
+Open [localhost:3000](http://localhost:3000). Optional credentials can be passed with additional `--env` arguments. Stop this instance with `docker stop haven`; the named volume persists.
