@@ -31,11 +31,17 @@ Haven has no login: anyone who can reach it can read/change inventory, download 
 
 Dokploy documents [Compose setup and environment handling](https://docs.dokploy.com/docs/core/docker-compose) and [domain routing](https://docs.dokploy.com/docs/core/docker-compose/domains).
 
+### Using a Dokploy Application
+
+Haven also supports the same deployment approach as TV Dinner: create an Application connected to this repository, use the root `Dockerfile`, route your domain to port **3000**, and add a persistent volume in Storage. Mount it at `/data` and set `DATA_DIR=/data` along with `APP_BASE_URL` and any optional credentials above. Redeploy after changing environment variables or mounts.
+
+If your existing volume is mounted at `/app/data`, keep that volume and set `DATA_DIR=/app/data` instead. The mount path and `DATA_DIR` must refer to the same directory. The development example's `DATA_DIR=./data` resolves to `/app/data` in this image and overrides the Dockerfile's `/data` default.
+
 ## Persistent storage and updates
 
 `haven-data` mounts at `/data`. Compose scopes its actual volume name to the project. Keep the same Dokploy service/project and volume across redeployments. Rebuild/redeploy replaces the container and preserves the volume. Do not delete the volume or run `docker compose down --volumes` unless you intend to erase all saved data. On a multi-server setup, keep Haven on the server holding its volume.
 
-The process runs as the image's `node` user (UID/GID 1000). A new Docker named volume gets the correct ownership from the image. If you substitute a bind mount or import files manually, make that data directory writable by UID/GID 1000. Keep SQLite's database, WAL/SHM files, and `uploads/` together. The image contains no local `.env`, database, photos, certificates, or Git history.
+Like TV Dinner, the container runs as root so existing root-owned Dokploy volumes are writable without a separate ownership repair. A volume mounted read-only or storage with host-side restrictions still needs those restrictions resolved. Keep SQLite's database, WAL/SHM files, and `uploads/` together. The image contains no local `.env`, database, photos, certificates, or Git history.
 
 Download a backup from Settings before updates. No reset/reseed runs on container startup. The existing disposable-schema policy still applies: an incompatible future schema fails startup and requires an intentional fresh database; this packaging does not introduce migrations.
 
@@ -55,7 +61,7 @@ docker run --rm --init \
   node --import tsx server/restore.ts /backup.zip /data
 ```
 
-The backup file must be readable by UID 1000. The CLI rejects nonempty destinations and incompatible backups. Stop the existing Haven container before switching volumes. In `docker-compose.yml`, replace the bottom volume declaration with:
+The CLI rejects nonempty destinations and incompatible backups. Stop the existing Haven container before switching volumes. In `docker-compose.yml`, replace the bottom volume declaration with:
 
 ```yaml
 volumes:
@@ -73,7 +79,7 @@ docker build -t prepper-app:local .
 pnpm test:container
 ```
 
-The smoke test uses a uniquely named temporary container and volume, checks production assets, native SQLite/image processing, backup download, health, graceful shutdown, and persistence after replacing the container, then removes only its test resources. It never mounts your normal `data/` directory. Pass another image tag with `pnpm test:container IMAGE`.
+The smoke test uses a uniquely named temporary container and root-owned volume, checks production assets, native SQLite/image processing, backup download, health, graceful shutdown, and persistence after replacing the container with the volume at `/app/data`, then removes only its test resources. It never mounts your normal `data/` directory. Pass another image tag with `pnpm test:container IMAGE`.
 
 To run the image locally:
 

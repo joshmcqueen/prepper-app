@@ -25,7 +25,7 @@ async function ready() {
   throw new Error('Container did not become ready');
 }
 
-async function start() {
+async function start(dataDir = '/data') {
   docker(
     'run',
     '--detach',
@@ -35,7 +35,9 @@ async function start() {
     '--publish',
     '127.0.0.1::3000',
     '--mount',
-    `type=volume,source=${volume},target=/data`,
+    `type=volume,source=${volume},target=${dataDir}`,
+    '--env',
+    `DATA_DIR=${dataDir}`,
     '--env',
     `APP_BASE_URL=${appBaseUrl}`,
     image,
@@ -62,8 +64,20 @@ async function json(route: string, body?: unknown) {
 
 try {
   docker('volume', 'create', volume);
+  // Reproduce a pre-existing Dokploy volume that only root can write to.
+  docker(
+    'run',
+    '--rm',
+    '--user',
+    '0:0',
+    '--mount',
+    `type=volume,source=${volume},target=/data`,
+    image,
+    'node',
+    '-e',
+    "const fs = require('node:fs'); fs.mkdirSync('/data/uploads', { recursive: true }); for (const p of ['/data', '/data/uploads']) { fs.chownSync(p, 0, 0); fs.chmodSync(p, 0o755); }",
+  );
   await start();
-  assert.equal(docker('exec', name, 'id', '-u'), '1000', 'Run as the unprivileged node user');
   assert.equal(docker('exec', name, 'node', '--version').split('.')[0], 'v24');
   docker(
     'exec',
@@ -142,7 +156,8 @@ try {
   docker('stop', '--time', '30', name);
   assert.equal(docker('inspect', '--format', '{{.State.ExitCode}}', name), '0');
   docker('rm', name);
-  await start();
+  // Also cover an Application deployment using DATA_DIR=/app/data.
+  await start('/app/data');
   const persisted = await json('/api/state');
   assert.equal(persisted.stocks.length, 1);
   assert.equal(persisted.stocks[0].id, stock.id);
