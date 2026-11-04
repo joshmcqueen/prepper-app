@@ -11,6 +11,7 @@ import {
   jugChangesSchema,
   settingsSchema,
   calculateDashboard,
+  isWaterTank,
   waterTankInput,
   type Settings,
 } from '../shared/model.ts';
@@ -97,9 +98,9 @@ export async function buildApp(options: {
     const stock = store.get(paramsSchema.parse(req.params).id);
     return store.db
       .prepare(
-        'SELECT action,note,created_at AS createdAt,before_json AS beforeJson,after_json AS afterJson FROM adjustments WHERE stock_id=? ORDER BY id DESC LIMIT 100',
+        'SELECT action,note,created_at AS createdAt,before_json AS beforeJson,after_json AS afterJson FROM adjustments WHERE stock_id=? ORDER BY id DESC LIMIT ?',
       )
-      .all(stock.id);
+      .all(stock.id, isWaterTank(stock) ? -1 : 100);
   });
   app.post('/api/stocks', async (req, reply) => {
     const stock = store.create(stockInputSchema.parse(req.body));
@@ -218,10 +219,12 @@ export async function buildApp(options: {
           'correct',
           'empty',
           'rotate',
+          'fill_water_tank',
           'rotate_to_hot_tub',
+          'empty_water_tank',
+          'clean_water_tank',
           'move',
         ]),
-        refilled: z.boolean().optional(),
         amount: z.number().finite().min(0).max(1e12).optional(),
         date: stockInputSchema.shape.lastRotatedOn.optional(),
         locationId: identity.nullable().optional(),

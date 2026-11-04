@@ -381,63 +381,119 @@ test('bucket QR opens live contents and new bags inherit the bucket without gues
   expect(await sameLabel.body()).toEqual(await label.body());
 });
 
-test('tank setup, hot tub rotation, refill confirmation, and conflict recovery', async ({
+test('records the first tank fill, hot tub rotations, and dated maintenance history', async ({
   page,
   request,
 }) => {
   await request.post('/api/database/reset', { data: { mode: 'empty', confirmation: 'RESET' } });
   await page.goto('/water');
-  await page.getByRole('button', { name: 'Set up 300-gallon tank', exact: true }).click();
-  await page.getByRole('button', { name: 'Save tank setup', exact: true }).click();
   const panel = page.getByRole('region', { name: 'Water tank rotation' });
+  const dialog = page.getByRole('dialog');
+  const progress = panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' });
+  const save = dialog.getByRole('button', { name: 'Save maintenance' });
+  const action = dialog.getByLabel('Inventory action');
+  const amount = dialog.getByRole('spinbutton', { name: 'Gallons in tank after filling' });
+  const date = dialog.getByLabel('Maintenance date');
+  const note = dialog.getByRole('textbox', { name: 'Maintenance note' });
+  const openMaintenance = () =>
+    panel.getByRole('button', { name: 'Record maintenance', exact: true }).click();
+
+  await panel.getByRole('button', { name: 'Set up water tank', exact: true }).click();
+  await expect(dialog.getByLabel('Physical capacity')).toHaveValue('300');
+  await dialog.getByRole('button', { name: 'Save tank setup', exact: true }).click();
   await expect(panel.getByText('Unknown', { exact: true })).toBeVisible();
-  await expect(panel.getByText('Add your last rotation date', { exact: true })).toBeVisible();
-  await expect(panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' })).toHaveCount(0);
+  await expect(panel.getByText('Waiting for a fresh fill', { exact: true })).toBeVisible();
+  await expect(progress).toHaveCount(0);
   let state = await (await request.get('/api/state')).json();
   expect(state.stocks).toHaveLength(1);
   expect(state.dashboard.water.total).toBe(0);
   const tank = state.stocks[0];
-  expect(tank.capacity).toBe(300);
-  expect(tank.rotationDays).toBe(45);
 
-  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
-  const dialog = page.getByRole('dialog');
-  const today = await dialog.getByLabel('Tank rotation date').inputValue();
-  const expected = new Date(`${today}T00:00:00Z`);
-  expected.setUTCDate(expected.getUTCDate() + 45);
-  const next = expected.toISOString().slice(0, 10);
-  await dialog.getByRole('textbox', { name: 'Tank rotation note' }).fill('Transferred to hot tub');
-  // Another device updates the tank while this form remains open.
-  await request.put(`/api/stocks/${tank.id}`, { data: { ...tank, notes: 'Other device' } });
-  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toContainText('changed on another device');
-  await expect(dialog.getByRole('textbox', { name: 'Tank rotation note' })).toHaveValue(
-    'Transferred to hot tub',
-  );
-  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.reload();
-  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
-  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
+  await panel.getByRole('button', { name: 'Tank details', exact: true }).click();
+  await page.getByRole('button', { name: 'Update stock', exact: true }).click();
+  await expect(action).toHaveValue('fill_water_tank');
+  await expect(amount).toHaveValue('');
+  const today = await date.inputValue();
+  const next = addDays(today, 45);
+  await amount.fill('250');
+  await note.fill('First fill at the top bung');
+  await save.click();
   await expect(dialog).toHaveCount(0);
+  await expect(page.locator('.detail-hero strong')).toHaveText('250');
   state = await (await request.get('/api/state')).json();
-  expect(state.stocks[0].quantity).toBeNull();
-  expect(state.dashboard.alerts.find((a: { type: string }) => a.type === 'rotation').date).toBe(
-    next,
+  expect(state.stocks[0]).toMatchObject({ quantity: 250, capacity: 300, rotationDays: 45 });
+  expect(state.dashboard.water.total).toBe(250);
+  expect(state.dashboard.alerts).toEqual(
+    expect.arrayContaining([expect.objectContaining({ type: 'rotation', date: next })]),
   );
 
-  await panel.getByRole('button', { name: 'Record hot tub rotation', exact: true }).click();
-  await dialog.getByRole('switch', { name: /Tank refilled to full/ }).check();
-  await dialog.getByRole('textbox', { name: 'Tank rotation note' }).fill('Refilled after transfer');
-  await dialog.getByRole('button', { name: 'Save rotation', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  await page.goto('/water');
+  await openMaintenance();
+  await expect(action).toHaveValue('rotate_to_hot_tub');
+  const outcome = dialog.getByLabel('After pumping into the hot tub');
+  await outcome.selectOption('refilled');
+  await expect(amount).toHaveValue('');
+  await amount.fill('225');
+  await note.fill('Refilled after transfer');
+  const concurrent = await request.put(`/api/stocks/${tank.id}`, {
+    data: { ...state.stocks[0], notes: 'Other device' },
+  });
+  expect(concurrent.ok()).toBe(true);
+  await save.click();
+  await expect(dialog.getByRole('alert')).toContainText('changed on another device');
+  await expect(amount).toHaveValue('225');
+  await expect(note).toHaveValue('Refilled after transfer');
+  await expect(date).toHaveValue(today);
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+
   await page.reload();
-  await expect(panel.getByText('300 gallons', { exact: true })).toHaveCount(2);
-  await expect(panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' })).toHaveAttribute(
-    'aria-valuenow',
-    '0',
+  await openMaintenance();
+  await outcome.selectOption('refilled');
+  await amount.fill('225');
+  await note.fill('Refilled after transfer');
+  await save.click();
+  await expect(panel.getByText('225 gallons', { exact: true })).toBeVisible();
+  await openMaintenance();
+  await outcome.selectOption('empty');
+  await save.click();
+  await expect(panel.getByText('0 gallons', { exact: true })).toBeVisible();
+  await expect(progress).toHaveCount(0);
+  state = await (await request.get('/api/state')).json();
+  expect(state.dashboard.alerts.some((alert: { type: string }) => alert.type === 'rotation')).toBe(
+    false,
   );
-  await panel.getByRole('button', { name: 'Rotation history', exact: true }).click();
-  await expect(dialog.getByText('Refilled after transfer', { exact: false })).toBeVisible();
+
+  await openMaintenance();
+  await action.selectOption('clean_water_tank');
+  const yesterday = addDays(today, -1);
+  await date.fill(yesterday);
+  await note.fill('Annual cleaning');
+  await save.click();
+  await expect(panel.getByText('0 gallons', { exact: true })).toBeVisible();
+
+  await panel.getByRole('button', { name: 'Edit rotation setup', exact: true }).click();
+  await dialog.getByLabel('Physical capacity').fill('280');
+  await dialog.getByRole('button', { name: 'Save tank setup', exact: true }).click();
+  await expect(panel.getByText('280 gallons', { exact: true })).toBeVisible();
+
+  await openMaintenance();
+  await expect(action).toHaveValue('fill_water_tank');
+  await amount.fill('250');
+  await save.click();
+  await expect(progress).toHaveAttribute('aria-valuenow', '0');
+
+  await page.reload();
+  await panel.getByRole('button', { name: 'Tank history', exact: true }).click();
+  const cleaning = dialog.locator('.history-row').filter({ hasText: 'Tank cleaned' });
+  await expect(cleaning).toContainText('Annual cleaning');
+  await expect(cleaning.locator('time')).toHaveAttribute('datetime', yesterday);
+  await expect(
+    dialog.locator('.history-row').filter({ hasText: 'Refilled after transfer' }),
+  ).toContainText('Filled to 225 gallons');
+  await expect(
+    dialog.locator('.history-row').filter({ hasText: 'First fill at the top bung' }),
+  ).toContainText('Filled to 250 gallons');
+  await expect(dialog.getByText('Left empty', { exact: true })).toBeVisible();
   await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -502,7 +558,7 @@ test('rotation timeline shows elapsed time, due and overdue states, and unknown 
   await expect(progress).toHaveAttribute('aria-valuenow', '18');
   await expect(panel.getByLabel('20 days until rotation', { exact: true })).toBeVisible();
   await setCycle(null);
-  await expect(panel.getByText('Add your last rotation date', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Waiting for a fresh fill', { exact: true })).toBeVisible();
   await expect(progress).toHaveCount(0);
   const final = await (await request.get(`/api/stocks/${tank.id}`)).json();
   expect(final.quantity).toBe(300);
@@ -531,6 +587,7 @@ test('configures an existing tank for 45 days without duplicating water', async 
   await page.goto('/water');
   await page.getByRole('button', { name: 'Set up 45-day rotation', exact: true }).click();
   const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('spinbutton', { name: 'Physical capacity' })).toHaveValue('200');
   await expect(
     dialog.getByRole('spinbutton', { name: 'Water currently in tank', exact: true }),
   ).toHaveValue('125');
@@ -539,7 +596,7 @@ test('configures an existing tank for 45 days without duplicating water', async 
   const updated = await (await request.get('/api/state')).json();
   expect(updated.stocks.length).toBe(state.stocks.length);
   expect(updated.stocks.find((s: { id: string }) => s.id === tank.id)).toMatchObject({
-    capacity: 300,
+    capacity: 200,
     quantity: 125,
     rotationDays: 45,
     rotationMonths: null,

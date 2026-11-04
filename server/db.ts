@@ -8,6 +8,8 @@ import {
   stockInputSchema,
   round,
   calendarDay,
+  isTankMaintenance,
+  isWaterTank,
   type StockInput,
   type Stock,
   type Settings,
@@ -131,14 +133,20 @@ export function openStore(dataDir: string) {
     );
     return get(stockId);
   }
-  function log(before: Stock | null, after: Stock, action: string, note = '') {
+  function log(
+    before: Stock | null,
+    after: Stock,
+    action: string,
+    note = '',
+    maintenanceOn?: string,
+  ) {
     db.prepare(
       'INSERT INTO adjustments(stock_id,action,before_json,after_json,note,created_at) VALUES (?,?,?,?,?,?)',
     ).run(
       after.id,
       action,
       JSON.stringify(before),
-      JSON.stringify(after),
+      JSON.stringify(maintenanceOn ? { ...after, maintenanceOn } : after),
       note,
       new Date().toISOString(),
     );
@@ -270,39 +278,79 @@ export function openStore(dataDir: string) {
       locationId?: string | null;
       containerId?: string | null;
       note?: string;
-      refilled?: boolean;
     },
   ): Stock {
     return db.transaction(() => {
       const before = get(stockId);
       checkVersion(before, version);
       const next = { ...before };
-      if (actionName === 'use') {
+      let maintenanceOn: string | undefined;
+      if (isTankMaintenance(actionName)) {
+        if (!isWaterTank(before))
+          throw new AppError(400, 'Maintenance is available for water tanks');
+        if (actionName === 'rotate_to_hot_tub' && before.rotationDestination !== 'hot_tub')
+          throw new AppError(400, 'Set up hot tub rotation for this water tank first');
+        if (!args.date) throw new AppError(400, 'Enter the maintenance date');
+        const timezone = getSettings().timezone;
+        if (args.date > calendarDay(new Date(), timezone))
+          throw new AppError(400, 'Maintenance date cannot be in the future');
+        maintenanceOn = args.date;
+        if (actionName !== 'clean_water_tank') {
+          const previous = db
+            .prepare(
+              `
+            SELECT created_at AS createdAt, COALESCE(json_extract(after_json, '$.maintenanceOn'),
+              CASE WHEN action = 'rotate_to_hot_tub' THEN json_extract(after_json, '$.lastRotatedOn') END
+            ) AS maintenanceOn FROM adjustments WHERE stock_id=? AND (
+              action IN ('fill_water_tank', 'rotate_to_hot_tub', 'empty_water_tank', 'empty') OR
+              (action IN ('use', 'refill', 'correct', 'edit') AND
+                json_extract(before_json, '$.quantity') IS NOT json_extract(after_json, '$.quantity'))
+            ) ORDER BY id DESC LIMIT 1
+          `,
+            )
+            .get(stockId) as { createdAt: string; maintenanceOn: string | null } | undefined;
+          if (
+            (before.lastRotatedOn && args.date < before.lastRotatedOn) ||
+            (previous &&
+              args.date <
+                (previous.maintenanceOn ?? calendarDay(new Date(previous.createdAt), timezone)))
+          )
+            throw new AppError(
+              400,
+              'Maintenance date cannot be before the last recorded water change',
+            );
+
+          const amount = actionName === 'empty_water_tank' ? 0 : args.amount;
+          if (amount == null || (actionName === 'fill_water_tank' && amount <= 0))
+            throw new AppError(
+              400,
+              actionName === 'fill_water_tank'
+                ? 'Enter the gallons in the tank after filling'
+                : 'Enter the gallons after rotation, or zero if the tank was left empty',
+            );
+          if (amount > 0 && !before.capacity)
+            throw new AppError(400, 'Set the physical tank capacity before recording a fill');
+          next.quantity = amount;
+          next.lastRotatedOn = amount > 0 ? args.date : null;
+          next.rotationOn = null;
+        }
+      } else if (actionName === 'use') {
         if (before.quantity == null)
           throw new AppError(400, 'Set the remaining quantity before recording use');
         next.quantity = round(before.quantity - (args.amount || 0));
       } else if (actionName === 'refill') {
         if (before.quantity == null)
-          throw new AppError(400, 'Set the remaining quantity before recording a refill');
+          throw new AppError(
+            400,
+            isWaterTank(before)
+              ? 'Starting amount is unknown. Choose Record fresh fill or Set remaining amount.'
+              : 'Set the remaining quantity before recording a refill',
+          );
         next.quantity = round(before.quantity + (args.amount || 0));
       } else if (actionName === 'correct') next.quantity = args.amount ?? null;
       else if (actionName === 'empty') next.quantity = 0;
-      else if (actionName === 'rotate' || actionName === 'rotate_to_hot_tub') {
+      else if (actionName === 'rotate') {
         if (!args.date) throw new AppError(400, 'A rotation date is required');
-        if (actionName === 'rotate_to_hot_tub') {
-          if (before.category !== 'water' || before.rotationDestination !== 'hot_tub')
-            throw new AppError(400, 'Set up hot tub rotation for this water tank first');
-          if (args.date > calendarDay(new Date(), getSettings().timezone))
-            throw new AppError(400, 'A completed rotation cannot be in the future');
-          if (before.lastRotatedOn && args.date < before.lastRotatedOn)
-            throw new AppError(400, 'Rotation date cannot be before the last recorded rotation');
-          if (args.refilled) {
-            if (!before.capacity)
-              throw new AppError(400, 'Set tank capacity before confirming a full refill');
-            next.quantity = before.capacity;
-          }
-          args.note = `Rotated into hot tub. ${args.refilled ? 'Refilled tank to capacity.' : 'Refill not confirmed; recorded quantity unchanged.'}${args.note ? ` ${args.note}` : ''}`;
-        }
         next.lastRotatedOn = args.date;
         next.rotationOn = null;
       } else if (actionName === 'move') {
@@ -322,7 +370,7 @@ export function openStore(dataDir: string) {
         stockId,
       );
       const after = get(stockId);
-      log(before, after, actionName, args.note);
+      log(before, after, actionName, args.note, maintenanceOn);
       return after;
     })();
   }

@@ -2,11 +2,12 @@ import { useState } from 'react';
 import { ArrowRight, Droplets, History, RotateCw } from 'lucide-react';
 import { useApp } from './App';
 import { dateLabel, number } from './api';
-import { AsyncButton, Field, Modal, Num, Toggle } from './ui';
+import { AsyncButton, Field, Modal, Num } from './ui';
 import {
   addDays,
   calendarDay,
   daysBetween,
+  isWaterTank,
   rotationDate,
   waterTankInput,
   type Stock,
@@ -14,8 +15,8 @@ import {
 
 export function WaterTank() {
   const { state, navigate, setModal } = useApp();
-  const [dialog, setDialog] = useState<{ mode: 'setup' | 'rotate'; stock?: Stock } | null>(null);
-  const tanks = state.stocks.filter((s) => s.category === 'water' && s.packaging === 'tank');
+  const [setup, setSetup] = useState<{ stock?: Stock } | null>(null);
+  const tanks = state.stocks.filter(isWaterTank);
   const today = calendarDay(new Date(), state.settings.timezone);
   return (
     <section className="panel water-tank-panel" aria-label="Water tank rotation">
@@ -28,13 +29,10 @@ export function WaterTank() {
         </div>
         <span className="status-pill">Outdoor water reserve</span>
       </div>
-      <p>
-        Cycle your 300-gallon outdoor tank into the hot tub, then refill the tank for the next
-        cycle.
-      </p>
+      <p>Cycle your outdoor tank into the hot tub, then record how much fresh water goes in.</p>
       {tanks.length === 0 ? (
-        <button className="button secondary" onClick={() => setDialog({ mode: 'setup' })}>
-          Set up 300-gallon tank <ArrowRight size={16} />
+        <button className="button secondary" onClick={() => setSetup({})}>
+          Set up water tank <ArrowRight size={16} />
         </button>
       ) : (
         tanks.map((tank) => {
@@ -42,56 +40,41 @@ export function WaterTank() {
           return (
             <div className="water-tank" key={tank.id}>
               <h3>{tank.name}</h3>
-              {configured ? (
-                <>
-                  <RotationTimeline tank={tank} today={today} />
-                  <dl className="tank-facts">
-                    <div>
-                      <dt>Capacity</dt>
-                      <dd>{number(tank.capacity ?? 300)} gallons</dd>
-                    </div>
-                    <div>
-                      <dt>Recorded water</dt>
-                      <dd>
-                        {tank.quantity == null ? 'Unknown' : `${number(tank.quantity)} gallons`}
-                      </dd>
-                    </div>
-                  </dl>
-                  <div className="button-row wrap">
-                    <button
-                      className="button"
-                      onClick={() => setDialog({ mode: 'rotate', stock: tank })}
-                    >
-                      <RotateCw size={17} /> Record hot tub rotation
-                    </button>
-                    <button
-                      className="button secondary"
-                      onClick={() => setModal({ type: 'history', stock: tank })}
-                    >
-                      <History size={17} /> Rotation history
-                    </button>
-                    <button className="text-button" onClick={() => navigate(`/item/${tank.id}`)}>
-                      Tank details <ArrowRight size={15} />
-                    </button>
-                    <button
-                      className="text-button"
-                      onClick={() => setDialog({ mode: 'setup', stock: tank })}
-                    >
-                      Edit rotation setup
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p>Use this existing tank for your 300-gallon, 45-day routine.</p>
-                  <button
-                    className="button secondary"
-                    onClick={() => setDialog({ mode: 'setup', stock: tank })}
-                  >
-                    Set up 45-day rotation
-                  </button>
-                </>
-              )}
+              {configured && <RotationTimeline tank={tank} today={today} />}
+              <dl className="tank-facts">
+                <div>
+                  <dt>Capacity</dt>
+                  <dd>
+                    {tank.capacity == null ? 'Unknown' : `${number(tank.capacity, 8)} gallons`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recorded water</dt>
+                  <dd>
+                    {tank.quantity == null ? 'Unknown' : `${number(tank.quantity, 8)} gallons`}
+                  </dd>
+                </div>
+              </dl>
+              <div className="button-row wrap">
+                <button
+                  className="button"
+                  onClick={() => setModal({ type: 'tank-maintenance', stock: tank })}
+                >
+                  <RotateCw size={17} /> Record maintenance
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={() => setModal({ type: 'history', stock: tank })}
+                >
+                  <History size={17} /> Tank history
+                </button>
+                <button className="text-button" onClick={() => navigate(`/item/${tank.id}`)}>
+                  Tank details <ArrowRight size={15} />
+                </button>
+                <button className="text-button" onClick={() => setSetup({ stock: tank })}>
+                  {configured ? 'Edit rotation setup' : 'Set up 45-day rotation'}
+                </button>
+              </div>
             </div>
           );
         })
@@ -100,9 +83,7 @@ export function WaterTank() {
         Due dates appear in Needs attention and use your existing email reminder settings, with a
         reminder 7 days before and on the due date.
       </p>
-      {dialog && (
-        <TankDialog mode={dialog.mode} stock={dialog.stock} onClose={() => setDialog(null)} />
-      )}
+      {setup && <TankSetupDialog stock={setup.stock} onClose={() => setSetup(null)} />}
     </section>
   );
 }
@@ -121,7 +102,7 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
     : `Every ${tank.rotationMonths} months`;
   const status =
     days == null
-      ? 'Add your last rotation date'
+      ? 'Waiting for a fresh fill'
       : days === 0
         ? 'Rotation due today'
         : `${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'} ${days < 0 ? 'overdue' : 'until rotation'}`;
@@ -164,12 +145,12 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
         <p className="footnote rotation-start-hint">
           {due
             ? 'Record the last rotation date to show cycle progress.'
-            : 'Record the last fill or completed rotation to start the timeline and reminders.'}
+            : 'Record a fresh fill to start the timeline and reminders.'}
         </p>
       )}
       <dl className="rotation-dates">
         <div>
-          <dt>Last rotated</dt>
+          <dt>Cycle started</dt>
           <dd>{dateLabel(tank.lastRotatedOn)}</dd>
         </div>
         <div>
@@ -188,44 +169,50 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
   );
 }
 
-function TankDialog({
-  mode,
-  stock,
-  onClose,
-}: {
-  mode: 'setup' | 'rotate';
-  stock?: Stock;
-  onClose: () => void;
-}) {
+function TankSetupDialog({ stock, onClose }: { stock?: Stock; onClose: () => void }) {
   const { state, mutate, toast } = useApp();
   const today = calendarDay(new Date(), state.settings.timezone);
-  const [date, setDate] = useState(mode === 'rotate' ? today : stock?.lastRotatedOn || '');
-  const [quantity, setQuantity] = useState<number | null>(stock?.quantity ?? null);
-  const [refilled, setRefilled] = useState(false);
-  const [note, setNote] = useState('');
-  const next = date
-    ? mode === 'rotate'
-      ? rotationDate({ ...stock!, lastRotatedOn: date, rotationOn: null })
-      : addDays(date, 45)
-    : null;
+  const defaults = waterTankInput();
+  const [date, setDate] = useState(stock?.lastRotatedOn ?? '');
+  const [capacity, setCapacity] = useState(stock?.capacity || defaults.capacity);
+  const [quantity, setQuantity] = useState(stock?.quantity ?? null);
+  const configured = stock?.rotationDestination === 'hot_tub';
+  const input = {
+    ...defaults,
+    locationId: state.locations.find((l) => l.id === 'LOC-OUTDOORS')?.id ?? null,
+    ...stock,
+    capacity,
+    quantity,
+    rotationDays: configured ? stock.rotationDays : defaults.rotationDays,
+    rotationMonths: configured ? stock.rotationMonths : null,
+    rotationDestination: 'hot_tub' as const,
+    rotationOn: configured && date === (stock.lastRotatedOn ?? '') ? stock.rotationOn : null,
+    lastRotatedOn: date || null,
+    leadDays: configured ? stock.leadDays : defaults.leadDays,
+    notify: configured ? stock.notify : defaults.notify,
+    snoozedUntil: configured ? stock.snoozedUntil : null,
+  };
+  const next = rotationDate(input);
   return (
     <Modal
-      title={mode === 'setup' ? 'Set up your tank rotation' : 'Record hot tub rotation'}
+      title={configured ? 'Edit tank rotation setup' : 'Set up your tank rotation'}
       onClose={onClose}
     >
       <div className="modal-body form-stack">
-        <p>
-          {mode === 'setup'
-            ? '300-gallon outdoor tank · rotate into the hot tub every 45 days. Existing water quantities stay as entered below.'
-            : 'Record this after transferring the tank water into the hot tub.'}
-        </p>
+        <Field label="Physical capacity (gallons)" hint="Enter the maximum your tank can hold.">
+          <Num label="Physical capacity" value={capacity} onChange={setCapacity} />
+        </Field>
+        <Field label="Water currently in tank (gallons)" hint="Leave the amount blank if unknown.">
+          <Num
+            label="Water currently in tank"
+            value={quantity}
+            max={capacity ?? undefined}
+            onChange={setQuantity}
+          />
+        </Field>
         <Field
-          label={mode === 'setup' ? 'Last filled / rotated on' : 'Rotation completed on'}
-          hint={
-            mode === 'setup'
-              ? 'Leave blank if unknown. Reminders start once a date is recorded.'
-              : undefined
-          }
+          label="Last filled / rotated on"
+          hint="Leave blank if unknown. You can start the countdown by recording a fresh fill."
         >
           <input
             type="date"
@@ -235,88 +222,27 @@ function TankDialog({
             onChange={(e) => setDate(e.target.value)}
           />
         </Field>
-        {mode === 'setup' ? (
-          <Field
-            label="Water currently in tank (gallons)"
-            hint="Capacity is 300 gallons. Leave the amount blank if unknown."
-          >
-            <Num
-              label="Water currently in tank"
-              value={quantity}
-              max={300}
-              onChange={setQuantity}
-            />
-          </Field>
-        ) : (
-          <>
-            <Toggle
-              checked={refilled}
-              onChange={setRefilled}
-              hint={`Only confirm after refilling. This sets recorded water to ${number(stock!.capacity!)} gallons.`}
-            >
-              Tank refilled to full
-            </Toggle>
-            <p className="footnote">
-              {refilled
-                ? `Recorded water will be set to ${number(stock!.capacity!)} gallons.`
-                : 'Recorded water amount stays unchanged. If the tank is empty or partially filled, update the amount in Tank details.'}
-            </p>
-            <Field label="Rotation note (optional)">
-              <textarea
-                aria-label="Tank rotation note"
-                value={note}
-                maxLength={800}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </Field>
-          </>
-        )}
-        <p>{next ? `Next rotation: ${dateLabel(next)}` : 'Next rotation: waiting for a date'}</p>
+        <p>
+          {next ? `Next rotation ${dateLabel(next)}` : 'Next rotation is waiting for a fill date.'}
+        </p>
       </div>
       <footer className="modal-footer">
         <button className="button secondary" onClick={onClose}>
           Cancel
         </button>
         <AsyncButton
-          disabled={(mode === 'rotate' && !date) || date > today}
+          disabled={date > today}
           action={async () => {
-            if (mode === 'setup') {
-              const input = {
-                ...(stock || {
-                  ...waterTankInput(),
-                  locationId: state.locations.find((l) => l.id === 'LOC-OUTDOORS')?.id ?? null,
-                }),
-                capacity: 300,
-                quantity,
-                rotationDays: 45,
-                rotationMonths: null,
-                rotationDestination: 'hot_tub',
-                rotationOn: null,
-                lastRotatedOn: date || null,
-                leadDays: 7,
-                notify: true,
-                snoozedUntil: null,
-              };
-              await mutate(
-                stock ? `/api/stocks/${stock.id}` : '/api/stocks',
-                stock ? 'PUT' : 'POST',
-                input,
-              );
-              toast('Tank rotation set up · every 45 days');
-            } else {
-              await mutate(`/api/stocks/${stock!.id}/actions`, 'POST', {
-                version: stock!.version,
-                action: 'rotate_to_hot_tub',
-                date,
-                refilled,
-                note,
-              });
-              toast('Hot tub rotation recorded');
-            }
+            await mutate(
+              stock ? `/api/stocks/${stock.id}` : '/api/stocks',
+              stock ? 'PUT' : 'POST',
+              input,
+            );
+            toast('Tank setup saved');
             onClose();
           }}
         >
-          {mode === 'setup' ? 'Save tank setup' : 'Save rotation'}
+          Save tank setup
         </AsyncButton>
       </footer>
     </Modal>

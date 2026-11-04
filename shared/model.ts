@@ -324,6 +324,21 @@ export function rotationDate(stock: StockInput): string | null {
         : null)
   );
 }
+export const tankMaintenanceLabels = {
+  fill_water_tank: 'Fresh fill',
+  rotate_to_hot_tub: 'Hot tub rotation',
+  empty_water_tank: 'Tank emptied',
+  clean_water_tank: 'Tank cleaned',
+} as const;
+
+export function isTankMaintenance(action: string): action is keyof typeof tankMaintenanceLabels {
+  return Object.hasOwn(tankMaintenanceLabels, action);
+}
+
+export function isWaterTank(stock: StockInput): boolean {
+  return stock.category === 'water' && stock.packaging === 'tank';
+}
+
 export function waterTankInput(): StockInput {
   return stockInputSchema.parse({
     category: 'water',

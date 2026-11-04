@@ -496,44 +496,79 @@ describe('inventory API and persistence', () => {
       rotationDestination: 'hot_tub',
     });
   });
-  it('records hot tub rotations atomically, refills only when confirmed, and preserves history', async () => {
+  it('records actual tank fills and dated maintenance atomically', async () => {
     const tank = await create(waterTankInput());
-    const rotate = (version: number, date: string, refilled = false) =>
+    const post = (stock: Stock, action: string, date?: string, amount?: number, note?: string) =>
       runtime.app.inject({
         method: 'POST',
-        url: `/api/stocks/${tank.id}/actions`,
-        payload: { version, action: 'rotate_to_hot_tub', date, refilled },
+        url: `/api/stocks/${stock.id}/actions`,
+        payload: { version: stock.version, action, date, amount, note },
       });
-    expect((await rotate(1, '2026-02-30')).statusCode).toBe(400);
-    expect((await rotate(1, '2099-01-01')).statusCode).toBe(400);
-    expect(runtime.store.get(tank.id).version).toBe(1);
-    const first = await rotate(1, '2026-01-31');
-    expect(first.statusCode).toBe(200);
-    expect(first.json().quantity).toBeNull();
-    expect(rotationDate(first.json())).toBe('2026-03-17');
-    expect((await rotate(1, '2026-03-17', true)).statusCode).toBe(409);
-    expect((await rotate(2, '2026-01-30', true)).statusCode).toBe(400);
-    const second = await rotate(2, '2026-03-17', true);
-    expect(second.json().quantity).toBe(300);
-    expect(rotationDate(second.json())).toBe('2026-05-01');
-    const history = (await runtime.app.inject(`/api/stocks/${tank.id}/history`)).json();
-    expect(history[0].action).toBe('rotate_to_hot_tub');
-    expect(history[0].note).toContain('Refilled tank to capacity');
-    expect(history[1].note).toContain('recorded quantity unchanged');
-    expect(JSON.parse(history[0].beforeJson).quantity).toBeNull();
-    expect(JSON.parse(history[0].afterJson).lastRotatedOn).toBe('2026-03-17');
-    const third = await rotate(3, '2026-05-01');
-    expect(third.json().quantity).toBe(300);
-    const food = await create();
-    expect(
-      (
-        await runtime.app.inject({
-          method: 'POST',
-          url: `/api/stocks/${food.id}/actions`,
-          payload: { version: 1, action: 'rotate_to_hot_tub', date: '2026-05-01', refilled: true },
-        })
-      ).statusCode,
-    ).toBe(400);
+    const history = async () => (await runtime.app.inject(`/api/stocks/${tank.id}/history`)).json();
+    const initialHistory = await history();
+    expect((await post(tank, 'refill', undefined, 250)).statusCode).toBe(400);
+    expect((await post(tank, 'fill_water_tank', '2026-01-31', 301)).statusCode).toBe(400);
+    expect((await post(tank, 'fill_water_tank', '2026-01-31', 0)).statusCode).toBe(400);
+    expect((await post(tank, 'fill_water_tank', '2026-02-30', 250)).statusCode).toBe(400);
+    expect((await post(tank, 'fill_water_tank', '2099-01-01', 250)).statusCode).toBe(400);
+    expect((await post(tank, 'fill_water_tank', undefined, 250)).statusCode).toBe(400);
+    expect((await post(tank, 'rotate_to_hot_tub', '2026-01-31')).statusCode).toBe(400);
+    expect((await post(await create(), 'clean_water_tank', '2026-01-31')).statusCode).toBe(400);
+    expect(runtime.store.get(tank.id)).toEqual(tank);
+    expect(await history()).toEqual(initialHistory);
+
+    const fillResponse = await post(tank, 'fill_water_tank', '2026-01-31', 250, 'First fill');
+    expect(fillResponse.statusCode).toBe(200);
+    const filled = fillResponse.json<Stock>();
+    expect(filled).toMatchObject({ quantity: 250, capacity: 300, version: 2 });
+    expect(rotationDate(filled)).toBe('2026-03-17');
+    expect((await post(tank, 'rotate_to_hot_tub', '2026-03-17', 225)).statusCode).toBe(409);
+    expect((await post(filled, 'empty_water_tank', '2026-01-30')).statusCode).toBe(400);
+    expect((await post(filled, 'rotate_to_hot_tub', '2026-03-17', 301)).statusCode).toBe(400);
+    expect(runtime.store.get(tank.id)).toEqual(filled);
+    expect(await history()).toHaveLength(initialHistory.length + 1);
+
+    const rotated = (
+      await post(filled, 'rotate_to_hot_tub', '2026-03-17', 225, 'Hose refill')
+    ).json<Stock>();
+    expect(rotated.quantity).toBe(225);
+    expect(rotationDate(rotated)).toBe('2026-05-01');
+    const cleaned = (
+      await post(rotated, 'clean_water_tank', '2026-01-30', undefined, 'Annual cleaning')
+    ).json<Stock>();
+    expect(cleaned.quantity).toBe(225);
+    expect(rotationDate(cleaned)).toBe('2026-05-01');
+
+    const drained = (await post(cleaned, 'rotate_to_hot_tub', '2026-05-01', 0)).json<Stock>();
+    expect(drained.quantity).toBe(0);
+    expect(rotationDate(drained)).toBeNull();
+    expect((await post(drained, 'fill_water_tank', '2026-04-30', 250)).statusCode).toBe(400);
+    const refilled = (await post(drained, 'fill_water_tank', '2026-05-02', 300)).json<Stock>();
+    expect(refilled.quantity).toBe(300);
+    expect(rotationDate(refilled)).toBe('2026-06-16');
+    const emptied = (
+      await post(refilled, 'empty_water_tank', '2026-05-03', undefined, 'Drained for service')
+    ).json<Stock>();
+    expect(emptied.quantity).toBe(0);
+    expect(rotationDate(emptied)).toBeNull();
+    expect((await post(emptied, 'fill_water_tank', '2026-05-02', 200)).statusCode).toBe(400);
+
+    const rows = await history();
+    expect(rows.slice(0, 6).map((row: { action: string }) => row.action)).toEqual([
+      'empty_water_tank',
+      'fill_water_tank',
+      'rotate_to_hot_tub',
+      'clean_water_tank',
+      'rotate_to_hot_tub',
+      'fill_water_tank',
+    ]);
+    expect(rows[3].note).toBe('Annual cleaning');
+    expect(JSON.parse(rows[3].afterJson).maintenanceOn).toBe('2026-01-30');
+    expect(JSON.parse(rows[5].beforeJson).quantity).toBeNull();
+    expect(JSON.parse(rows[5].afterJson)).toMatchObject({
+      quantity: 250,
+      maintenanceOn: '2026-01-31',
+    });
   });
   it('does not add a second tank when water setup follows a dedicated tank setup', async () => {
     await create(waterTankInput());

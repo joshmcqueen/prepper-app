@@ -36,8 +36,11 @@ import {
   bucketNumberLabel,
   effectiveLocationId,
   calendarDay,
+  isTankMaintenance,
+  isWaterTank,
   round,
   rotationDate,
+  tankMaintenanceLabels,
   type Category,
   type Container,
   type Stock,
@@ -561,7 +564,7 @@ export function StockDetail({ id }: { id: string }) {
             </button>
             <button className="text-button" onClick={() => setModal({ type: 'history', stock })}>
               <History size={16} />
-              History
+              {isWaterTank(stock) ? 'Tank history' : 'History'}
             </button>
             <button className="text-button danger-text" onClick={() => setDeleting(true)}>
               <Trash2 size={16} />
@@ -821,7 +824,13 @@ export function InventoryModal({
   if (modal.type === 'container') return <ContainerModal id={modal.id} onClose={onClose} />;
   if (modal.type === 'split') return <SplitModal stock={modal.stock} onClose={onClose} />;
   if (modal.type === 'history') return <HistoryModal stock={modal.stock} onClose={onClose} />;
-  return <ActionModal stock={modal.stock} onClose={onClose} />;
+  return (
+    <ActionModal
+      stock={modal.stock}
+      maintenanceOnly={modal.type === 'tank-maintenance'}
+      onClose={onClose}
+    />
+  );
 }
 function DeleteStocksModal({ stocks, onClose }: { stocks: Stock[]; onClose: () => void }) {
   const { mutate, toast } = useApp();
@@ -858,19 +867,45 @@ function DeleteStocksModal({ stocks, onClose }: { stocks: Stock[]; onClose: () =
     </Modal>
   );
 }
-function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
+function ActionModal({
+  stock,
+  maintenanceOnly,
+  onClose,
+}: {
+  stock: Stock;
+  maintenanceOnly: boolean;
+  onClose: () => void;
+}) {
   const { state, mutate, toast } = useApp();
-  const [action, setAction] = useState('use'),
+  const tank = isWaterTank(stock);
+  const hotTub = tank && stock.rotationDestination === 'hot_tub';
+  const today = calendarDay(new Date(), state.settings.timezone);
+  const [action, setAction] = useState(
+      tank && (stock.quantity == null || stock.quantity === 0)
+        ? 'fill_water_tank'
+        : maintenanceOnly
+          ? hotTub
+            ? 'rotate_to_hot_tub'
+            : 'fill_water_tank'
+          : 'use',
+    ),
     [amount, setAmount] = useState<number | null>(null),
-    [date, setDate] = useState(calendarDay(new Date(), state.settings.timezone)),
+    [outcome, setOutcome] = useState(''),
+    [date, setDate] = useState(today),
     [locationId, setLocation] = useState(effectiveLocationId(stock, state.containers) || ''),
     [containerId, setContainer] = useState(stock.containerId || ''),
     [note, setNote] = useState(''),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
+  const maintenance = isTankMaintenance(action);
+  const hotTubRotation = action === 'rotate_to_hot_tub';
+  const freshWater = action === 'fill_water_tank' || (hotTubRotation && outcome === 'refilled');
+  const drained = action === 'empty_water_tank' || (hotTubRotation && outcome === 'empty');
+  const nextRotation =
+    freshWater && date ? rotationDate({ ...stock, lastRotatedOn: date, rotationOn: null }) : null;
   return (
     <Modal
-      title="Update your stock"
+      title={maintenanceOnly ? 'Record tank maintenance' : 'Update your stock'}
       subtitle={`${stock.name} · ${stock.quantity == null ? 'Unknown quantity' : `${number(stock.quantity, 2)} ${stock.unit} remaining`}`}
       onClose={onClose}
     >
@@ -883,13 +918,13 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
             await mutate(`/api/stocks/${stock.id}/actions`, 'POST', {
               version: stock.version,
               action,
-              amount: amount ?? undefined,
+              amount: hotTubRotation && outcome === 'empty' ? 0 : (amount ?? undefined),
               date,
               locationId: locationId || null,
               containerId: containerId || null,
               note,
             });
-            toast('Inventory updated');
+            toast(maintenance ? 'Tank maintenance recorded' : 'Inventory updated');
             onClose();
           } catch (err) {
             setError((err as Error).message);
@@ -906,19 +941,38 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
               onChange={(e) => {
                 setAction(e.target.value);
                 setAmount(null);
+                setOutcome('');
+                setError('');
               }}
             >
-              <option value="use">Use some</option>
-              <option value="refill">Refill / add more</option>
-              <option value="correct">Set remaining amount</option>
-              <option value="rotate">Record rotation</option>
-              <option value="move">Move to storage</option>
-              <option value="empty">Mark empty</option>
+              {tank && (
+                <optgroup label="Tank maintenance">
+                  <option value="fill_water_tank">Record fresh fill</option>
+                  {hotTub && <option value="rotate_to_hot_tub">Record hot tub rotation</option>}
+                  <option value="empty_water_tank">Empty tank</option>
+                  <option value="clean_water_tank">Clean tank</option>
+                </optgroup>
+              )}
+              {!maintenanceOnly && (
+                <>
+                  <option value="use">Use some</option>
+                  <option value="refill">{tank ? 'Add gallons' : 'Refill / add more'}</option>
+                  <option value="correct">Set remaining amount</option>
+                  {!hotTub && <option value="rotate">Record rotation</option>}
+                  <option value="move">Move to storage</option>
+                  {!tank && <option value="empty">Mark empty</option>}
+                </>
+              )}
             </select>
           </Field>
           {['use', 'refill', 'correct'].includes(action) && (
             <Field
               label={`${action === 'correct' ? 'New remaining amount' : 'Amount'} (${stock.unit})`}
+              hint={
+                tank && action === 'refill'
+                  ? 'Adds to a known starting amount. Use Record fresh fill for the total after filling an empty tank.'
+                  : undefined
+              }
             >
               <Num
                 label="Action amount"
@@ -928,6 +982,61 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
                 onChange={setAmount}
               />
             </Field>
+          )}
+          {maintenance && (
+            <Field label="Maintenance date">
+              <input
+                type="date"
+                aria-label="Maintenance date"
+                required
+                max={today}
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+              />
+            </Field>
+          )}
+          {hotTubRotation && (
+            <Field label="After pumping into the hot tub">
+              <select
+                aria-label="After pumping into the hot tub"
+                value={outcome}
+                onChange={(e) => setOutcome(e.target.value)}
+                required
+              >
+                <option value="">Choose an outcome</option>
+                <option value="empty">Left empty</option>
+                <option value="refilled">Refilled</option>
+              </select>
+            </Field>
+          )}
+          {freshWater && (
+            <Field
+              label="Gallons in tank after filling"
+              hint={
+                stock.capacity
+                  ? `Physical capacity is ${number(stock.capacity, 8)} gallons.`
+                  : 'Set the physical capacity in tank setup first.'
+              }
+            >
+              <Num
+                label="Gallons in tank after filling"
+                value={amount}
+                min={0.00000001}
+                max={stock.capacity ?? undefined}
+                placeholder="Enter gallons"
+                required
+                onChange={setAmount}
+              />
+            </Field>
+          )}
+          {nextRotation && <p className="footnote">Next rotation {dateLabel(nextRotation)}</p>}
+          {drained && (
+            <p className="footnote">The rotation countdown pauses until the next fresh fill.</p>
+          )}
+          {action === 'clean_water_tank' && (
+            <p className="footnote">
+              This logs the cleaning date and note. Record emptying and filling as separate events.
+            </p>
           )}
           {action === 'rotate' && (
             <>
@@ -996,10 +1105,11 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
               is enabled.
             </p>
           )}
-          <Field label="Adjustment note (optional)">
+          <Field label={maintenance ? 'Maintenance note (optional)' : 'Adjustment note (optional)'}>
             <input
-              aria-label="Adjustment note"
+              aria-label={maintenance ? 'Maintenance note' : 'Adjustment note'}
               value={note}
+              maxLength={1000}
               onChange={(e) => setNote(e.target.value)}
             />
           </Field>
@@ -1010,7 +1120,7 @@ function ActionModal({ stock, onClose }: { stock: Stock; onClose: () => void }) 
             Cancel
           </button>
           <button className="button" disabled={busy}>
-            {busy ? <Busy /> : 'Save update'}
+            {busy ? <Busy /> : maintenance ? 'Save maintenance' : 'Save update'}
           </button>
         </footer>
       </form>
@@ -1487,6 +1597,8 @@ function ContainerModal({ id, onClose }: { id?: string; onClose: () => void }) {
   );
 }
 function HistoryModal({ stock, onClose }: { stock: Stock; onClose: () => void }) {
+  const { state } = useApp();
+  const tank = isWaterTank(stock);
   const [rows, setRows] = useState<
       { action: string; note: string; createdAt: string; beforeJson: string; afterJson: string }[]
     >([]),
@@ -1496,29 +1608,53 @@ function HistoryModal({ stock, onClose }: { stock: Stock; onClose: () => void })
       .then(setRows)
       .catch((e) => setError(e.message));
   }, [stock.id]);
+  const entries = rows.map((row) => {
+    const before = JSON.parse(row.beforeJson) as Stock | null;
+    const after = JSON.parse(row.afterJson) as Stock & { maintenanceOn?: string };
+    const performedOn =
+      after.maintenanceOn ?? (row.action === 'rotate_to_hot_tub' ? after.lastRotatedOn : null);
+    const day = performedOn ?? calendarDay(new Date(row.createdAt), state.settings.timezone);
+    return { ...row, before, after, day };
+  });
+  if (tank) entries.sort((a, b) => b.day.localeCompare(a.day));
   return (
-    <Modal title="Inventory history" subtitle={`${stock.name} · ${stock.id}`} onClose={onClose}>
+    <Modal
+      title={tank ? 'Tank history' : 'Inventory history'}
+      subtitle={`${stock.name} · ${stock.id}`}
+      onClose={onClose}
+    >
       <div className="modal-body">
         <ErrorMessage message={error} />
-        {rows.map((row, i) => {
-          const before = JSON.parse(row.beforeJson),
-            after = JSON.parse(row.afterJson);
+        {entries.map(({ action, before, after, day, note, createdAt }, i) => {
+          const maintenance = isTankMaintenance(action);
+          const dated = maintenance && !!after.maintenanceOn;
+          const next = rotationDate(after);
           return (
             <div className="history-row" key={i}>
-              <strong>
-                {row.action === 'rotate_to_hot_tub' ? 'Hot tub rotation' : row.action}
-              </strong>
-              <time>{new Date(row.createdAt).toLocaleString()}</time>
-              <p>
-                {before?.quantity ?? 'Unknown'} → {after.quantity ?? 'Unknown'} {after.unit}
-              </p>
-              {row.note && <p>{row.note}</p>}
-              {row.action === 'rotate_to_hot_tub' && (
+              <strong>{maintenance ? tankMaintenanceLabels[action] : action}</strong>
+              {tank ? (
+                <time dateTime={day}>{dateLabel(day)}</time>
+              ) : (
+                <time dateTime={createdAt}>{new Date(createdAt).toLocaleString()}</time>
+              )}
+              {dated ? (
+                action !== 'clean_water_tank' && (
+                  <p>
+                    {after.quantity === 0
+                      ? 'Left empty'
+                      : `Filled to ${number(after.quantity!, 8)} gallons`}
+                    {next && ` · Next rotation ${dateLabel(next)}`}
+                  </p>
+                )
+              ) : (
                 <p>
-                  Completed {dateLabel(after.lastRotatedOn)} · Next rotation{' '}
-                  {dateLabel(rotationDate(after))}
+                  {before?.quantity ?? 'Unknown'} → {after.quantity ?? 'Unknown'} {after.unit}
                 </p>
               )}
+              {!dated && action === 'rotate_to_hot_tub' && next && (
+                <p>Next rotation {dateLabel(next)}</p>
+              )}
+              {note && <p>{note}</p>}
             </div>
           );
         })}

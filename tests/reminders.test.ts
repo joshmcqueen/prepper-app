@@ -133,7 +133,7 @@ describe('persistent reminder delivery', () => {
     queueReminders(store, monday);
     expect(jobs().every((j) => j.status === 'cancelled')).toBe(true);
   });
-  it('deduplicates 45-day tank reminders and cancels old pending reminders after rotation', () => {
+  it('pauses tank reminders after draining and restarts them after a fresh fill', () => {
     store.saveSettings({ ...store.getSettings(), digest: 'off' });
     const tank = store.create({ ...waterTankInput(), lastRotatedOn: '2026-09-18' });
     queueReminders(store, new Date('2026-10-25T18:00:00Z'));
@@ -142,16 +142,22 @@ describe('persistent reminder delivery', () => {
     queueReminders(store, monday);
     expect(jobs()).toHaveLength(1);
     expect(jobs()[0].id).toContain('2026-11-02:7');
-    store.action(tank.id, tank.version, 'rotate_to_hot_tub', {
+    const emptied = store.action(tank.id, tank.version, 'rotate_to_hot_tub', {
       date: '2026-10-26',
-      refilled: true,
+      amount: 0,
     });
     queueReminders(store, monday);
     expect(jobs()[0].status).toBe('cancelled');
-    queueReminders(store, new Date('2026-12-10T18:00:00Z'));
-    queueReminders(store, new Date('2026-12-10T18:00:00Z'));
+    queueReminders(store, new Date('2026-11-02T18:00:00Z'));
+    expect(jobs()).toHaveLength(1);
+    store.action(tank.id, emptied.version, 'fill_water_tank', {
+      date: '2026-10-27',
+      amount: 250,
+    });
+    queueReminders(store, new Date('2026-12-11T18:00:00Z'));
+    queueReminders(store, new Date('2026-12-11T18:00:00Z'));
     expect(jobs().filter((j) => j.status === 'pending')).toHaveLength(1);
-    expect(jobs().find((j) => j.status === 'pending')?.id).toContain('2026-12-10:0');
+    expect(jobs().find((j) => j.status === 'pending')?.id).toContain('2026-12-11:0');
   });
   it('skips a deleted resource even if its job was loaded while another email was sending', async () => {
     store.saveSettings({ ...store.getSettings(), digest: 'off' });

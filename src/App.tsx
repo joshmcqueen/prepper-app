@@ -27,7 +27,7 @@ import { SettingsPage } from './Settings';
 
 export type ModalState =
   | { type: 'edit'; category: Category; stock?: Stock; duplicate?: boolean; containerId?: string }
-  | { type: 'action' | 'split' | 'history'; stock: Stock }
+  | { type: 'action' | 'split' | 'history' | 'tank-maintenance'; stock: Stock }
   | { type: 'labels'; containerIds: string[] }
   | { type: 'bag-notes'; ids: string[] }
   | { type: 'container'; id?: string }
