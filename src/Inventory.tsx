@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { useApp, CoverageCard, PageHeading, type ModalState } from './App';
 import { api, categoryNames, dateLabel, download, number } from './api';
-import { WaterTank } from './WaterTank';
+import { WaterStorage } from './WaterStorage';
 import { WaterJugsModal } from './WaterJugs';
 import {
   AsyncButton,
@@ -73,29 +73,33 @@ export function Inventory({ category }: { category: Category }) {
   };
   const descriptions = {
     food: 'From everyday staples to long-term stores. Every calorie counts.',
-    water: 'Your water reserve, refill dates, and the next rotation.',
     fuel: 'Stored fuel and the assumptions behind your cooking and electricity coverage.',
     dog: 'Their food, their own reserve. Keep your companion in the plan.',
     supplies: 'The other essentials that help your household stay ready.',
   };
   return (
     <>
-      <PageHeading
-        eyebrow="YOUR HOUSEHOLD RESERVE"
-        title={
-          category === 'dog'
-            ? 'For your four-legged family.'
-            : `${categoryNames[category]}, accounted for.`
-        }
-        description={descriptions[category]}
-        action={
-          <button className="button" onClick={() => setModal({ type: 'edit', category })}>
-            <Plus size={18} />
-            Add {category === 'dog' ? 'dog food' : category === 'supplies' ? 'a supply' : category}
-          </button>
-        }
-      />
-      {category !== 'supplies' && (
+      {category === 'water' ? (
+        <WaterStorage />
+      ) : (
+        <PageHeading
+          eyebrow="YOUR HOUSEHOLD RESERVE"
+          title={
+            category === 'dog'
+              ? 'For your four-legged family.'
+              : `${categoryNames[category]}, accounted for.`
+          }
+          description={descriptions[category]}
+          action={
+            <button className="button" onClick={() => setModal({ type: 'edit', category })}>
+              <Plus size={18} />
+              Add{' '}
+              {category === 'dog' ? 'dog food' : category === 'supplies' ? 'a supply' : category}
+            </button>
+          }
+        />
+      )}
+      {category !== 'supplies' && category !== 'water' && (
         <div className="inventory-summary">
           <CoverageCard category={category} compact />
           <div className="panel metric-notes">
@@ -116,21 +120,6 @@ export function Inventory({ category }: { category: Category }) {
                 <p>
                   Based on compatible serving sizes and quantities. Missing nutrition stays unknown.
                 </p>
-              </>
-            ) : category === 'water' ? (
-              <>
-                <h3>Keep your water moving</h3>
-                <p>
-                  Use Rotate after checking a jug or cycling the outdoor tank. The next reminder
-                  follows its own interval.
-                </p>
-                <p>Missing last-rotation dates appear in Needs attention.</p>
-                <button
-                  className="button small secondary"
-                  onClick={() => setModal({ type: 'water-jugs' })}
-                >
-                  Add water jugs
-                </button>
               </>
             ) : category === 'dog' ? (
               <>
@@ -182,7 +171,6 @@ export function Inventory({ category }: { category: Category }) {
           </div>
         </div>
       )}
-      {category === 'water' && <WaterTank />}
       {category === 'fuel' && state.dashboard.alternativeFuel.length > 0 && (
         <div className="alternative-fuels">
           {state.dashboard.alternativeFuel.map((f) => (
@@ -203,6 +191,7 @@ export function Inventory({ category }: { category: Category }) {
       <StockTable
         stocks={state.stocks.filter((s) => s.category === category)}
         defaultCategory={category}
+        heading={category === 'water' ? 'Water inventory' : undefined}
       />
     </>
   );
@@ -210,11 +199,13 @@ export function Inventory({ category }: { category: Category }) {
 function StockTable({
   stocks,
   defaultCategory = 'food',
+  heading,
   showLocationFilter = true,
   containerId,
 }: {
   stocks: Stock[];
   defaultCategory?: Category;
+  heading?: string;
   showLocationFilter?: boolean;
   containerId?: string;
 }) {
@@ -237,8 +228,9 @@ function StockTable({
   });
   const chosen = shown.filter((s) => selected.has(s.id));
   return (
-    <section className="panel stock-panel">
+    <section className="panel stock-panel" aria-label={heading}>
       <div className="inventory-toolbar">
+        {heading && <h2>{heading}</h2>}
         <div className="search-field">
           <Search size={18} />
           <input

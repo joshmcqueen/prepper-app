@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import sharp from 'sharp';
 import jsQR from 'jsqr';
 import AxeBuilder from '@axe-core/playwright';
-import { addDays, calendarDay } from '../../shared/model';
+import { addDays, calendarDay, type Stock } from '../../shared/model';
 test.beforeEach(async ({ request }) => {
   const r = await request.post('/api/database/reset', {
     data: { mode: 'demo', confirmation: 'RESET' },
@@ -388,6 +388,7 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
   await request.post('/api/database/reset', { data: { mode: 'empty', confirmation: 'RESET' } });
   await page.goto('/water');
   const panel = page.getByRole('region', { name: 'Water tank rotation' });
+  const tankFill = panel.locator('.tank-gauge .vessel-water');
   const dialog = page.getByRole('dialog');
   const progress = panel.getByRole('progressbar', { name: 'Rotation cycle elapsed' });
   const save = dialog.getByRole('button', { name: 'Save maintenance' });
@@ -401,7 +402,9 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
   await panel.getByRole('button', { name: 'Set up water tank', exact: true }).click();
   await expect(dialog.getByLabel('Physical capacity')).toHaveValue('300');
   await dialog.getByRole('button', { name: 'Save tank setup', exact: true }).click();
-  await expect(panel.getByText('Unknown', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Amount unknown', { exact: true })).toBeVisible();
+  await expect(panel.getByText(/Fill level unknown/)).toBeVisible();
+  await expect(tankFill).toHaveCount(0);
   await expect(panel.getByText('Waiting for a fresh fill', { exact: true })).toBeVisible();
   await expect(progress).toHaveCount(0);
   let state = await (await request.get('/api/state')).json();
@@ -428,6 +431,9 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
   );
 
   await page.goto('/water');
+  await expect(panel.getByText('250 of 300 gal', { exact: true })).toBeVisible();
+  await expect(panel.getByText('83% full', { exact: true })).toBeVisible();
+  await expect(tankFill).toBeVisible();
   await openMaintenance();
   await expect(action).toHaveValue('rotate_to_hot_tub');
   const outcome = dialog.getByLabel('After pumping into the hot tub');
@@ -452,11 +458,13 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
   await amount.fill('225');
   await note.fill('Refilled after transfer');
   await save.click();
-  await expect(panel.getByText('225 gallons', { exact: true })).toBeVisible();
+  await expect(panel.getByText('225 of 300 gal', { exact: true })).toBeVisible();
+  await expect(panel.getByText('75% full', { exact: true })).toBeVisible();
   await openMaintenance();
   await outcome.selectOption('empty');
   await save.click();
-  await expect(panel.getByText('0 gallons', { exact: true })).toBeVisible();
+  await expect(panel.getByText('0% full', { exact: true })).toBeVisible();
+  await expect(tankFill).toHaveCount(0);
   await expect(progress).toHaveCount(0);
   state = await (await request.get('/api/state')).json();
   expect(state.dashboard.alerts.some((alert: { type: string }) => alert.type === 'rotation')).toBe(
@@ -469,12 +477,12 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
   await date.fill(yesterday);
   await note.fill('Annual cleaning');
   await save.click();
-  await expect(panel.getByText('0 gallons', { exact: true })).toBeVisible();
+  await expect(panel.getByText('0 of 300 gal', { exact: true })).toBeVisible();
 
   await panel.getByRole('button', { name: 'Edit rotation setup', exact: true }).click();
   await dialog.getByLabel('Physical capacity').fill('280');
   await dialog.getByRole('button', { name: 'Save tank setup', exact: true }).click();
-  await expect(panel.getByText('280 gallons', { exact: true })).toBeVisible();
+  await expect(panel.getByText('0 of 280 gal', { exact: true })).toBeVisible();
 
   await openMaintenance();
   await expect(action).toHaveValue('fill_water_tank');
@@ -502,6 +510,69 @@ test('records the first tank fill, hot tub rotations, and dated maintenance hist
     path: `test-results/${test.info().project.name}-water-tank.png`,
     fullPage: true,
   });
+});
+
+test('water overview shows jug quantities and the earliest tracked date', async ({
+  page,
+  request,
+}) => {
+  const state = await (await request.get('/api/state')).json();
+  const today = calendarDay(new Date(), state.settings.timezone);
+  const jugs = (state.stocks as Stock[])
+    .filter((stock) => stock.packaging === 'jug')
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const changes = [
+    { bestBy: addDays(today, 31), rotationOn: addDays(today, 60), quantity: 3 },
+    { bestBy: addDays(today, 7), rotationOn: addDays(today, 7), leadDays: 7 },
+    { expiresOn: today, bestBy: today, rotationOn: today },
+    { rotationOn: addDays(today, -1), expiresOn: addDays(today, 10), quantity: 0 },
+    { lastRotatedOn: null, quantity: null },
+    { rotationOn: addDays(today, 8), leadDays: 7 },
+  ];
+  for (const [index, jug] of jugs.entries()) {
+    const saved = await request.put(`/api/stocks/${jug.id}`, {
+      data: { ...jug, ...changes[index] },
+    });
+    expect(saved.ok()).toBe(true);
+  }
+
+  await page.goto('/water');
+  await expect(page.getByRole('heading', { name: 'Water storage' })).toBeVisible();
+  await expect(page.getByText(/318 gallons recorded/)).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Water inventory' })).toBeVisible();
+  const shelf = page.getByRole('region', { name: 'Indoor water jugs' });
+  const tiles = shelf.getByRole('list').getByRole('button');
+  await expect(tiles).toHaveCount(6);
+  await expect(shelf.getByText('6 jugs · 18 gallons recorded')).toBeVisible();
+  await expect(tiles.nth(0)).toContainText(/Jug 1.*3 gal.*Scheduled.*Best by/);
+  await expect(tiles.nth(1)).toContainText(/Jug 2.*Due soon.*Best by/);
+  await expect(tiles.nth(2)).toContainText(/Jug 3.*Due today.*Expires/);
+  await expect(tiles.nth(2).locator('time')).toHaveAttribute('datetime', today);
+  await expect(tiles.nth(3)).toContainText(/Jug 4.*Empty.*Overdue.*Rotation/);
+  await expect(tiles.nth(4)).toContainText(/Jug 5.*Amount unknown.*No date set/);
+  await expect(tiles.nth(5)).toContainText(/Jug 6.*Scheduled.*Rotation/);
+  const columns = (el: Element) => getComputedStyle(el).gridTemplateColumns.split(' ').length;
+  expect(await page.locator('.water-overview').evaluate(columns)).toBe(
+    test.info().project.name === 'desktop' ? 2 : 1,
+  );
+  expect(await shelf.getByRole('list').evaluate(columns)).toBe(
+    test.info().project.name === 'phone' ? 3 : 6,
+  );
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const a11y = await new AxeBuilder({ page }).include('.water-overview').analyze();
+  expect(a11y.violations).toEqual([]);
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-water-overview.png`,
+    fullPage: true,
+  });
+
+  await shelf.getByRole('button', { name: 'Add water jugs' }).focus();
+  await page.keyboard.press('Tab');
+  await expect(tiles.first()).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(`/item/${jugs[0].id}`);
 });
 
 test('rotation timeline shows elapsed time, due and overdue states, and unknown dates', async ({
@@ -532,6 +603,10 @@ test('rotation timeline shows elapsed time, due and overdue states, and unknown 
     '18 of 45 days elapsed. 27 days until rotation.',
   );
   await expect(panel.getByLabel('27 days until rotation', { exact: true })).toBeVisible();
+  await expect(panel.getByText('Reminder window', { exact: true })).toBeHidden();
+  await panel.getByText('Rotation details', { exact: true }).click();
+  await expect(panel.getByText('Reminder window', { exact: true })).toBeVisible();
+  await panel.getByText('Rotation details', { exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
@@ -641,6 +716,11 @@ test('adds jugs with shared details, bulk edits existing jugs, and deletes a sel
   ).toBe(true);
   expect(state.dashboard.water.total).toBe(30);
   await page.goto('/water');
+  const firstJugDate = page
+    .getByRole('region', { name: 'Indoor water jugs' })
+    .getByRole('button', { name: /^Jug 1 / })
+    .locator('time');
+  await expect(firstJugDate).toHaveAttribute('datetime', '2027-10-02');
   await page.getByRole('checkbox', { name: 'Select all shown resources', exact: true }).check();
   await page.getByRole('button', { name: 'Edit selected jugs', exact: true }).click();
   dialog = page.getByRole('dialog');
@@ -675,6 +755,7 @@ test('adds jugs with shared details, bulk edits existing jugs, and deletes a sel
   });
   await dialog.getByRole('button', { name: 'Save jug details', exact: true }).click();
   await expect(dialog).toHaveCount(0);
+  await expect(firstJugDate).toHaveAttribute('datetime', '2027-10-20');
   state = await (await request.get('/api/state')).json();
   expect(
     state.stocks.every(

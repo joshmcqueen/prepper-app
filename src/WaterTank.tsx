@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ArrowRight, Droplets, History, RotateCw } from 'lucide-react';
+import { useId, useState } from 'react';
+import { ArrowRight, CalendarDays, History, RotateCw } from 'lucide-react';
 import { useApp } from './App';
 import { dateLabel, number } from './api';
 import { AsyncButton, Field, Modal, Num } from './ui';
@@ -13,23 +13,15 @@ import {
   type Stock,
 } from '../shared/model';
 
-export function WaterTank() {
+export function WaterTank({ today }: { today: string }) {
   const { state, navigate, setModal } = useApp();
   const [setup, setSetup] = useState<{ stock?: Stock } | null>(null);
   const tanks = state.stocks.filter(isWaterTank);
-  const today = calendarDay(new Date(), state.settings.timezone);
   return (
     <section className="panel water-tank-panel" aria-label="Water tank rotation">
       <div className="section-heading">
-        <div>
-          <span className="eyebrow">WATER THAT KEEPS MOVING</span>
-          <h2>
-            <Droplets size={22} /> Tank → hot tub
-          </h2>
-        </div>
-        <span className="status-pill">Outdoor water reserve</span>
+        <h2>Outdoor water tank</h2>
       </div>
-      <p>Cycle your outdoor tank into the hot tub, then record how much fresh water goes in.</p>
       {tanks.length === 0 ? (
         <button className="button secondary" onClick={() => setSetup({})}>
           Set up water tank <ArrowRight size={16} />
@@ -39,35 +31,23 @@ export function WaterTank() {
           const configured = tank.rotationDestination === 'hot_tub';
           return (
             <div className="water-tank" key={tank.id}>
-              <h3>{tank.name}</h3>
-              {configured && <RotationTimeline tank={tank} today={today} />}
-              <dl className="tank-facts">
-                <div>
-                  <dt>Capacity</dt>
-                  <dd>
-                    {tank.capacity == null ? 'Unknown' : `${number(tank.capacity, 8)} gallons`}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Recorded water</dt>
-                  <dd>
-                    {tank.quantity == null ? 'Unknown' : `${number(tank.quantity, 8)} gallons`}
-                  </dd>
-                </div>
-              </dl>
-              <div className="button-row wrap">
+              {(tanks.length > 1 || tank.name !== 'Outdoor water tank') && <h3>{tank.name}</h3>}
+              <TankReadout tank={tank} today={today} configured={configured} />
+              <div className="button-row wrap tank-actions">
                 <button
-                  className="button"
+                  className="button small"
                   onClick={() => setModal({ type: 'tank-maintenance', stock: tank })}
                 >
                   <RotateCw size={17} /> Record maintenance
                 </button>
                 <button
-                  className="button secondary"
+                  className="button small secondary"
                   onClick={() => setModal({ type: 'history', stock: tank })}
                 >
                   <History size={17} /> Tank history
                 </button>
+              </div>
+              <div className="button-row wrap tank-secondary-actions">
                 <button className="text-button" onClick={() => navigate(`/item/${tank.id}`)}>
                   Tank details <ArrowRight size={15} />
                 </button>
@@ -79,17 +59,23 @@ export function WaterTank() {
           );
         })
       )}
-      <p className="footnote">
-        Due dates appear in Needs attention and use your existing email reminder settings, with a
-        reminder 7 days before and on the due date.
-      </p>
       {setup && <TankSetupDialog stock={setup.stock} onClose={() => setSetup(null)} />}
     </section>
   );
 }
 
-function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
-  const due = rotationDate(tank);
+function TankReadout({
+  tank,
+  today,
+  configured,
+}: {
+  tank: Stock;
+  today: string;
+  configured: boolean;
+}) {
+  const { quantity, capacity } = tank;
+  const level = quantity != null && capacity ? Math.min(1, quantity / capacity) : null;
+  const due = configured ? rotationDate(tank) : null;
   const days = due ? daysBetween(today, due) : null;
   const cycleDays = due && tank.lastRotatedOn ? daysBetween(tank.lastRotatedOn, due) : 0;
   const elapsed = cycleDays > 0 ? Math.max(0, Math.min(cycleDays, cycleDays - days!)) : null;
@@ -97,9 +83,6 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
   const lead = tank.leadDays ?? (tank.highPriority ? 90 : 30);
   const reminder = due ? addDays(due, -lead) : null;
   const reminderPosition = cycleDays > 0 ? ((cycleDays - lead) / cycleDays) * 100 : null;
-  const interval = tank.rotationDays
-    ? `Every ${tank.rotationDays} days`
-    : `Every ${tank.rotationMonths} months`;
   const status =
     days == null
       ? 'Waiting for a fresh fill'
@@ -108,20 +91,53 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
         : `${Math.abs(days)} ${Math.abs(days) === 1 ? 'day' : 'days'} ${days < 0 ? 'overdue' : 'until rotation'}`;
   return (
     <div className={`rotation-timeline ${days != null && days <= 0 ? 'rotation-due' : ''}`}>
-      <div className="rotation-countdown">
-        <div aria-label={status}>
-          {days == null || days === 0 ? (
-            <strong className="rotation-status">{status}</strong>
-          ) : (
-            <>
-              <strong>{Math.abs(days)}</strong>
-              <span>
-                {Math.abs(days) === 1 ? 'day' : 'days'} {days < 0 ? 'overdue' : 'until rotation'}
-              </span>
-            </>
+      <div className="tank-readout">
+        <TankGauge level={level} />
+        <div className="tank-readout-text">
+          <div className="tank-level">
+            <p>
+              {quantity == null ? (
+                <strong>Amount unknown</strong>
+              ) : (
+                <>
+                  <strong>{number(quantity, 8)}</strong>
+                  {capacity ? ` of ${number(capacity, 8)} gal` : ' gal recorded'}
+                </>
+              )}
+            </p>
+            <p>
+              {level == null
+                ? quantity === 0
+                  ? 'Empty'
+                  : 'Fill level unknown'
+                : `${number(level * 100)}% full`}
+              {quantity == null && capacity ? ` · ${number(capacity, 8)} gal capacity` : ''}
+            </p>
+          </div>
+          {configured && (
+            <div className="rotation-countdown">
+              <div aria-label={status}>
+                {days == null || days === 0 ? (
+                  <strong className="rotation-status">{status}</strong>
+                ) : (
+                  <>
+                    <strong>{Math.abs(days)}</strong>
+                    <span>
+                      {Math.abs(days) === 1 ? 'day' : 'days'}{' '}
+                      {days < 0 ? 'overdue' : 'until rotation'}
+                    </span>
+                  </>
+                )}
+              </div>
+              {due && (
+                <p className="tank-due-date">
+                  <CalendarDays size={15} aria-hidden="true" />
+                  <time dateTime={due}>{dateLabel(due)}</time>
+                </p>
+              )}
+            </div>
           )}
         </div>
-        <span className="rotation-interval">{interval}</span>
       </div>
       {elapsed != null ? (
         <>
@@ -141,31 +157,56 @@ function RotationTimeline({ tank, today }: { tank: Stock; today: string }) {
             <span className="rotation-today-marker" style={{ left: `${progress}%` }} />
           </div>
         </>
-      ) : (
-        <p className="footnote rotation-start-hint">
-          {due
-            ? 'Record the last rotation date to show cycle progress.'
-            : 'Record a fresh fill to start the timeline and reminders.'}
-        </p>
+      ) : null}
+      {configured && (
+        <details className="rotation-details">
+          <summary>Rotation details</summary>
+          <dl className="rotation-dates">
+            <div>
+              <dt>Cycle started</dt>
+              <dd>{dateLabel(tank.lastRotatedOn)}</dd>
+            </div>
+            <div>
+              <dt>Reminder window</dt>
+              <dd>{dateLabel(reminder)}</dd>
+            </div>
+          </dl>
+          <p className="footnote">
+            {tank.rotationDays
+              ? `Every ${tank.rotationDays} days`
+              : `Every ${tank.rotationMonths} months`}
+          </p>
+        </details>
       )}
-      <dl className="rotation-dates">
-        <div>
-          <dt>Cycle started</dt>
-          <dd>{dateLabel(tank.lastRotatedOn)}</dd>
-        </div>
-        <div>
-          <dt>
-            <span className="rotation-reminder-key" aria-hidden="true" />
-            Reminder window
-          </dt>
-          <dd>{dateLabel(reminder)}</dd>
-        </div>
-        <div>
-          <dt>Rotate & refill</dt>
-          <dd>{dateLabel(due)}</dd>
-        </div>
-      </dl>
     </div>
+  );
+}
+
+function TankGauge({ level }: { level: number | null }) {
+  const clip = useId();
+  const body =
+    'M55 17H85L124 36Q127 38 127 42L117 174Q116 193 101 202Q88 210 70 210Q52 210 39 202Q24 193 23 174L13 42Q13 38 16 36Z';
+  const line = 210 - (level ?? 0) * 173;
+  return (
+    <svg viewBox="0 0 140 218" aria-hidden="true" className="tank-gauge">
+      <defs>
+        <clipPath id={clip}>
+          <path d={body} />
+        </clipPath>
+      </defs>
+      <rect x="53" y="11" width="34" height="9" rx="2" className="tank-hardware" />
+      <rect x="59" y="6" width="22" height="6" rx="2" className="tank-hardware" />
+      <path d={body} className="vessel-interior" />
+      {level != null && level > 0 && (
+        <g clipPath={`url(#${clip})`}>
+          <rect x="0" y={line} width="140" height={210 - line} className="vessel-water" />
+          <path d={`M0 ${line}H140`} className="tank-waterline" />
+        </g>
+      )}
+      <path d={body} className="tank-outline" />
+      <circle cx="70" cy="32" r="5" className="tank-hardware" />
+      <circle cx="70" cy="201" r="5" className="tank-hardware" />
+    </svg>
   );
 }
 
