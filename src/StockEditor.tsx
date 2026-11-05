@@ -48,24 +48,36 @@ export function StockEditor({
   category,
   stock,
   duplicate,
+  otherFuel,
   containerId,
   onClose,
 }: {
   category: Category;
   stock?: Stock;
   duplicate?: boolean;
+  otherFuel?: boolean;
   containerId?: string;
   onClose: () => void;
 }) {
   const { state, reload, toast, navigate, mutate } = useApp();
   const [form, setForm] = useState<StockInput>(() =>
     stock
-      ? { ...stock, name: duplicate ? `${stock.name} (copy)` : stock.name }
+      ? {
+          ...stock,
+          name: duplicate ? `${stock.name} (copy)` : stock.name,
+          lastRefilledOn: duplicate ? null : stock.lastRefilledOn,
+        }
       : {
           ...stockInputSchema.parse({
             name: 'New resource',
             category,
-            unit: category === 'water' ? 'gallon' : category === 'supplies' ? 'count' : 'lb',
+            unit:
+              category === 'water' || otherFuel
+                ? 'gallon'
+                : category === 'supplies'
+                  ? 'count'
+                  : 'lb',
+            ...(otherFuel && { fuelType: 'gasoline' }),
             locationId: containerId ? null : 'LOC-STORAGE',
             containerId: containerId || null,
             packaging: containerId ? 'mylar_1' : 'original',
@@ -73,6 +85,8 @@ export function StockEditor({
           name: '',
         },
   );
+  const propane = form.category === 'fuel' && form.fuelType === 'propane';
+  const propaneTank = propane && (form.packaging === 'tank' || !stock);
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [photoBusy, setPhotoBusy] = useState(false),
@@ -273,7 +287,9 @@ export function StockEditor({
     setBusy(true);
     setError('');
     try {
-      const parsed = stockInputSchema.safeParse(form);
+      const parsed = stockInputSchema.safeParse(
+        propaneTank ? { ...form, packaging: 'tank' } : form,
+      );
       if (!parsed.success)
         throw new Error(
           parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
@@ -308,13 +324,18 @@ export function StockEditor({
               <button
                 type="button"
                 key={key}
-                disabled={!!stock}
+                disabled={!!stock || otherFuel}
                 className={form.category === key ? 'active' : ''}
                 onClick={() =>
                   setForm((f) => ({
                     ...f,
                     category: key as Category,
-                    unit: key === 'water' ? 'gallon' : key === 'supplies' ? 'count' : 'lb',
+                    unit:
+                      key === 'water' || (key === 'fuel' && f.fuelType !== 'propane')
+                        ? 'gallon'
+                        : key === 'supplies'
+                          ? 'count'
+                          : 'lb',
                   }))
                 }
               >
@@ -521,9 +542,9 @@ export function StockEditor({
                 input('subcategory', 'Food or resource category', 'e.g. Grains, canned food, oils')
               )}
             </Field>
-            <Field label="Remaining quantity">
+            <Field label={propaneTank ? 'Propane remaining (lb)' : 'Remaining quantity'}>
               <Num
-                label="Remaining quantity"
+                label={propaneTank ? 'Propane remaining (lb)' : 'Remaining quantity'}
                 value={form.quantity}
                 onChange={(n) => field('quantity', n)}
               />
@@ -546,12 +567,14 @@ export function StockEditor({
               <Field
                 label={
                   form.category === 'fuel'
-                    ? 'Fuel capacity (not tank tare weight)'
+                    ? propaneTank
+                      ? 'Rated propane capacity (lb)'
+                      : 'Fuel capacity'
                     : 'Container capacity in gallons'
                 }
               >
                 <Num
-                  label="Capacity"
+                  label={propaneTank ? 'Rated propane capacity (lb)' : 'Capacity'}
                   value={form.capacity}
                   onChange={(n) => field('capacity', n)}
                 />
@@ -561,6 +584,7 @@ export function StockEditor({
               <Field label="Fuel type">
                 <select
                   aria-label="Fuel type"
+                  disabled={!!stock && propaneTank}
                   value={form.fuelType}
                   onChange={(e) =>
                     setForm((f) => ({
@@ -570,7 +594,10 @@ export function StockEditor({
                     }))
                   }
                 >
-                  {['propane', 'gasoline', 'diesel', 'other'].map((f) => (
+                  {(otherFuel
+                    ? ['gasoline', 'diesel', 'other']
+                    : ['propane', 'gasoline', 'diesel', 'other']
+                  ).map((f) => (
                     <option key={f} value={f}>
                       {f}
                     </option>
@@ -579,12 +606,16 @@ export function StockEditor({
               </Field>
             )}
             <Field label="Purchased on">{dateInput('purchasedOn', 'Purchased on')}</Field>
-            <Field label="Manufacturer best-by date">
-              {dateInput('bestBy', 'Manufacturer best-by date')}
-            </Field>
-            <Field label="Expiration date (if applicable)">
-              {dateInput('expiresOn', 'Expiration date')}
-            </Field>
+            {!propane && (
+              <>
+                <Field label="Manufacturer best-by date">
+                  {dateInput('bestBy', 'Manufacturer best-by date')}
+                </Field>
+                <Field label="Expiration date (if applicable)">
+                  {dateInput('expiresOn', 'Expiration date')}
+                </Field>
+              </>
+            )}
           </div>
           {['food', 'dog'].includes(form.category) && (
             <details className="form-details" open>
@@ -634,37 +665,43 @@ export function StockEditor({
             </details>
           )}
           <details className="form-details" open>
-            <summary>Storage & rotation</summary>
+            <summary>{propane ? 'Storage' : 'Storage & rotation'}</summary>
             <div className="form-grid">
-              <Field label="Packaging">
-                <select
-                  aria-label="Packaging"
-                  value={form.packaging}
-                  onChange={(e) => field('packaging', e.target.value as StockInput['packaging'])}
-                >
-                  {Object.entries(packagingLabels).map(([key, label]) => (
-                    <option key={key} value={key}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Bucket">
-                <select
-                  aria-label="Bucket"
-                  value={form.containerId || ''}
-                  onChange={(e) => field('containerId', e.target.value || null)}
-                >
-                  <option value="">No bucket / standalone</option>
-                  {state.containers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {bucketName(c)} ·{' '}
-                      {state.locations.find((l) => l.id === c.locationId)?.name ||
-                        'Location not assigned'}
-                    </option>
-                  ))}
-                </select>
-              </Field>
+              {!propaneTank && (
+                <>
+                  <Field label="Packaging">
+                    <select
+                      aria-label="Packaging"
+                      value={form.packaging}
+                      onChange={(e) =>
+                        field('packaging', e.target.value as StockInput['packaging'])
+                      }
+                    >
+                      {Object.entries(packagingLabels).map(([key, label]) => (
+                        <option key={key} value={key}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Bucket">
+                    <select
+                      aria-label="Bucket"
+                      value={form.containerId || ''}
+                      onChange={(e) => field('containerId', e.target.value || null)}
+                    >
+                      <option value="">No bucket / standalone</option>
+                      {state.containers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {bucketName(c)} ·{' '}
+                          {state.locations.find((l) => l.id === c.locationId)?.name ||
+                            'Location not assigned'}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </>
+              )}
               <Field
                 label="Storage location"
                 hint={
@@ -712,42 +749,46 @@ export function StockEditor({
                   </AsyncButton>
                 </div>
               </Field>
-              <Field label="Last rotated / refilled on">
-                {dateInput('lastRotatedOn', 'Last rotated on')}
-              </Field>
-              <Field label="Rotation interval unit">
-                <select
-                  aria-label="Rotation interval unit"
-                  value={form.rotationDays != null ? 'days' : 'months'}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      rotationDays: e.target.value === 'days' ? 45 : null,
-                      rotationMonths: e.target.value === 'months' ? 6 : null,
-                    })
-                  }
-                >
-                  <option value="months">Months</option>
-                  <option value="days">Days</option>
-                </select>
-              </Field>
-              <Field label={`Rotate every (${form.rotationDays != null ? 'days' : 'months'})`}>
-                <Num
-                  label={`Rotation interval in ${form.rotationDays != null ? 'days' : 'months'}`}
-                  value={form.rotationDays ?? form.rotationMonths}
-                  min={1}
-                  max={form.rotationDays != null ? 36500 : 1200}
-                  onChange={(n) =>
-                    field(form.rotationDays != null ? 'rotationDays' : 'rotationMonths', n)
-                  }
-                />
-              </Field>
-              <Field
-                label="Specific rotation date"
-                hint="Overrides the interval until the next rotation."
-              >
-                {dateInput('rotationOn', 'Specific rotation date')}
-              </Field>
+              {!propane && (
+                <>
+                  <Field label="Last rotated / refilled on">
+                    {dateInput('lastRotatedOn', 'Last rotated on')}
+                  </Field>
+                  <Field label="Rotation interval unit">
+                    <select
+                      aria-label="Rotation interval unit"
+                      value={form.rotationDays != null ? 'days' : 'months'}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          rotationDays: e.target.value === 'days' ? 45 : null,
+                          rotationMonths: e.target.value === 'months' ? 6 : null,
+                        })
+                      }
+                    >
+                      <option value="months">Months</option>
+                      <option value="days">Days</option>
+                    </select>
+                  </Field>
+                  <Field label={`Rotate every (${form.rotationDays != null ? 'days' : 'months'})`}>
+                    <Num
+                      label={`Rotation interval in ${form.rotationDays != null ? 'days' : 'months'}`}
+                      value={form.rotationDays ?? form.rotationMonths}
+                      min={1}
+                      max={form.rotationDays != null ? 36500 : 1200}
+                      onChange={(n) =>
+                        field(form.rotationDays != null ? 'rotationDays' : 'rotationMonths', n)
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="Specific rotation date"
+                    hint="Overrides the interval until the next rotation."
+                  >
+                    {dateInput('rotationOn', 'Specific rotation date')}
+                  </Field>
+                </>
+              )}
             </div>
           </details>
           <details className="form-details">

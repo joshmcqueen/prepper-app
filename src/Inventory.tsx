@@ -18,19 +18,10 @@ import {
 } from 'lucide-react';
 import { useApp, CoverageCard, PageHeading, type ModalState } from './App';
 import { api, categoryNames, dateLabel, download, number } from './api';
+import { FuelStorage, PropaneCylindersModal } from './FuelStorage';
 import { WaterStorage } from './WaterStorage';
 import { WaterJugsModal } from './WaterJugs';
-import {
-  AsyncButton,
-  Busy,
-  CategoryIcon,
-  Empty,
-  ErrorMessage,
-  Field,
-  Modal,
-  Num,
-  Toggle,
-} from './ui';
+import { AsyncButton, Busy, CategoryIcon, Empty, ErrorMessage, Field, Modal, Num } from './ui';
 import {
   bucketName,
   bucketNumberLabel,
@@ -38,6 +29,8 @@ import {
   calendarDay,
   isTankMaintenance,
   isWaterTank,
+  isPropane,
+  isPropaneTank,
   round,
   rotationDate,
   tankMaintenanceLabels,
@@ -57,23 +50,9 @@ function place(stock: Stock, state: ReturnType<typeof useApp>['state']) {
     .join(' · ');
 }
 export function Inventory({ category }: { category: Category }) {
-  const { state, setModal, navigate, mutate, toast } = useApp();
-  const [saving, setSaving] = useState(false),
-    [error, setError] = useState('');
-  const scenario = async (key: 'naturalGasAvailable' | 'generatorNeeded', value: boolean) => {
-    setSaving(true);
-    setError('');
-    try {
-      await mutate('/api/settings', 'PUT', { ...state.settings, [key]: value });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
+  const { state, setModal, navigate } = useApp();
   const descriptions = {
     food: 'From everyday staples to long-term stores. Every calorie counts.',
-    fuel: 'Stored fuel and the assumptions behind your cooking and electricity coverage.',
     dog: 'Their food, their own reserve. Keep your companion in the plan.',
     supplies: 'The other essentials that help your household stay ready.',
   };
@@ -81,6 +60,8 @@ export function Inventory({ category }: { category: Category }) {
     <>
       {category === 'water' ? (
         <WaterStorage />
+      ) : category === 'fuel' ? (
+        <FuelStorage />
       ) : (
         <PageHeading
           eyebrow="YOUR HOUSEHOLD RESERVE"
@@ -99,7 +80,7 @@ export function Inventory({ category }: { category: Category }) {
           }
         />
       )}
-      {category !== 'supplies' && category !== 'water' && (
+      {(category === 'food' || category === 'dog') && (
         <div className="inventory-summary">
           <CoverageCard category={category} compact />
           <div className="panel metric-notes">
@@ -121,7 +102,7 @@ export function Inventory({ category }: { category: Category }) {
                   Based on compatible serving sizes and quantities. Missing nutrition stays unknown.
                 </p>
               </>
-            ) : category === 'dog' ? (
+            ) : (
               <>
                 <h3>A measured daily ration</h3>
                 <p>
@@ -137,61 +118,20 @@ export function Inventory({ category }: { category: Category }) {
                   Adjust daily needs <ArrowRight size={16} />
                 </button>
               </>
-            ) : (
-              <>
-                <h3>Plan for the outage you have in mind</h3>
-                <fieldset disabled={saving} className="scenario-toggles">
-                  <Toggle
-                    checked={state.settings.naturalGasAvailable}
-                    onChange={(v) => void scenario('naturalGasAvailable', v)}
-                  >
-                    Natural gas available
-                  </Toggle>
-                  <Toggle
-                    checked={state.settings.generatorNeeded}
-                    onChange={(v) => void scenario('generatorNeeded', v)}
-                  >
-                    Generator needed
-                  </Toggle>
-                </fieldset>
-                <p>
-                  {state.settings.naturalGasAvailable
-                    ? 'Cooking and generation use the utility connection; stored fuel remains a separate reserve.'
-                    : 'Cooking and generation share each fuel’s recorded reserve. Alternative fuels are shown separately.'}
-                </p>
-                {state.dashboard.illustrative && (
-                  <span className="status-pill">Illustrative equipment assumptions</span>
-                )}
-                <button className="text-button" onClick={() => navigate('/settings')}>
-                  Fine-tune equipment <ArrowRight size={16} />
-                </button>
-                <ErrorMessage message={error} />
-              </>
             )}
           </div>
-        </div>
-      )}
-      {category === 'fuel' && state.dashboard.alternativeFuel.length > 0 && (
-        <div className="alternative-fuels">
-          {state.dashboard.alternativeFuel.map((f) => (
-            <div className="panel" key={`${f.type}${f.unit}`}>
-              <strong>{f.type}</strong>
-              <p>
-                {number(f.quantity, 1)} {f.unit} stored
-              </p>
-              <span>
-                {f.days == null
-                  ? 'Set equipment rates for coverage'
-                  : `${number(f.days, 1)} days for configured equipment`}
-              </span>
-            </div>
-          ))}
         </div>
       )}
       <StockTable
         stocks={state.stocks.filter((s) => s.category === category)}
         defaultCategory={category}
-        heading={category === 'water' ? 'Water inventory' : undefined}
+        heading={
+          category === 'water'
+            ? 'Water inventory'
+            : category === 'fuel'
+              ? 'Fuel inventory'
+              : undefined
+        }
       />
     </>
   );
@@ -341,7 +281,9 @@ function StockTable({
             <span />
           </div>
           {shown.map((stock) => {
-            const dates = [stock.bestBy, stock.expiresOn, rotationDate(stock)]
+            const dates = (
+              isPropane(stock) ? [] : [stock.bestBy, stock.expiresOn, rotationDate(stock)]
+            )
               .filter(Boolean)
               .sort();
             return (
@@ -419,6 +361,7 @@ export function StockDetail({ id }: { id: string }) {
       </Empty>
     );
   const alerts = state.dashboard.alerts.filter((a) => a.stockId === id);
+  const propaneTank = isPropaneTank(stock);
   return (
     <>
       <button className="text-button back-button" onClick={() => navigate(`/${stock.category}`)}>
@@ -450,6 +393,22 @@ export function StockDetail({ id }: { id: string }) {
             {stock.highPriority && <span className="priority-tag">Priority item</span>}
           </div>
           <div className="button-row wrap">
+            {propaneTank && (
+              <button
+                className="button secondary"
+                onClick={() => setModal({ type: 'propane-refill', stock })}
+              >
+                Record refill
+              </button>
+            )}
+            {isPropane(stock) && !propaneTank && (
+              <button
+                className="button secondary"
+                onClick={() => setModal({ type: 'propane-cylinders', source: stock })}
+              >
+                Convert to cylinders
+              </button>
+            )}
             <button
               className="button secondary"
               onClick={() => setModal({ type: 'action', stock })}
@@ -491,31 +450,47 @@ export function StockDetail({ id }: { id: string }) {
               <dt>Purchase date</dt>
               <dd>{dateLabel(stock.purchasedOn)}</dd>
             </div>
-            <div>
-              <dt>Best-by date</dt>
-              <dd>{dateLabel(stock.bestBy)}</dd>
-            </div>
-            <div>
-              <dt>Expiration date</dt>
-              <dd>{dateLabel(stock.expiresOn)}</dd>
-            </div>
-            <div>
-              <dt>Next rotation</dt>
-              <dd>{dateLabel(rotationDate(stock))}</dd>
-            </div>
-            <div>
-              <dt>Last rotation</dt>
-              <dd>{dateLabel(stock.lastRotatedOn)}</dd>
-            </div>
-            {(stock.rotationDays || stock.rotationMonths) && (
-              <div>
-                <dt>Rotation interval</dt>
-                <dd>
-                  {stock.rotationDays
-                    ? `${stock.rotationDays} days`
-                    : `${stock.rotationMonths} months`}
-                </dd>
-              </div>
+            {propaneTank && (
+              <>
+                <div>
+                  <dt>Rated propane capacity</dt>
+                  <dd>{stock.capacity ? `${number(stock.capacity, 2)} lb` : 'Unknown'}</dd>
+                </div>
+                <div>
+                  <dt>Last refilled on</dt>
+                  <dd>{dateLabel(stock.lastRefilledOn)}</dd>
+                </div>
+              </>
+            )}
+            {!isPropane(stock) && (
+              <>
+                <div>
+                  <dt>Best-by date</dt>
+                  <dd>{dateLabel(stock.bestBy)}</dd>
+                </div>
+                <div>
+                  <dt>Expiration date</dt>
+                  <dd>{dateLabel(stock.expiresOn)}</dd>
+                </div>
+                <div>
+                  <dt>Next rotation</dt>
+                  <dd>{dateLabel(rotationDate(stock))}</dd>
+                </div>
+                <div>
+                  <dt>Last rotation</dt>
+                  <dd>{dateLabel(stock.lastRotatedOn)}</dd>
+                </div>
+                {(stock.rotationDays || stock.rotationMonths) && (
+                  <div>
+                    <dt>Rotation interval</dt>
+                    <dd>
+                      {stock.rotationDays
+                        ? `${stock.rotationDays} days`
+                        : `${stock.rotationMonths} months`}
+                    </dd>
+                  </div>
+                )}
+              </>
             )}
             <div>
               <dt>Purchase batch</dt>
@@ -806,6 +781,8 @@ export function InventoryModal({
   modal: Exclude<ModalState, { type: 'edit' } | null>;
   onClose: () => void;
 }) {
+  if (modal.type === 'propane-cylinders')
+    return <PropaneCylindersModal source={modal.source} onClose={onClose} />;
   if (modal.type === 'water-jugs')
     return <WaterJugsModal stocks={modal.stocks} onClose={onClose} />;
   if (modal.type === 'delete-stocks')
@@ -820,6 +797,7 @@ export function InventoryModal({
     <ActionModal
       stock={modal.stock}
       maintenanceOnly={modal.type === 'tank-maintenance'}
+      refillOnly={modal.type === 'propane-refill'}
       onClose={onClose}
     />
   );
@@ -862,26 +840,31 @@ function DeleteStocksModal({ stocks, onClose }: { stocks: Stock[]; onClose: () =
 function ActionModal({
   stock,
   maintenanceOnly,
+  refillOnly,
   onClose,
 }: {
   stock: Stock;
   maintenanceOnly: boolean;
+  refillOnly: boolean;
   onClose: () => void;
 }) {
   const { state, mutate, toast } = useApp();
   const tank = isWaterTank(stock);
+  const propaneTank = isPropaneTank(stock);
   const hotTub = tank && stock.rotationDestination === 'hot_tub';
   const today = calendarDay(new Date(), state.settings.timezone);
   const [action, setAction] = useState(
-      tank && (stock.quantity == null || stock.quantity === 0)
-        ? 'fill_water_tank'
-        : maintenanceOnly
-          ? hotTub
-            ? 'rotate_to_hot_tub'
-            : 'fill_water_tank'
-          : 'use',
+      refillOnly
+        ? 'fill_propane_tank'
+        : tank && (stock.quantity == null || stock.quantity === 0)
+          ? 'fill_water_tank'
+          : maintenanceOnly
+            ? hotTub
+              ? 'rotate_to_hot_tub'
+              : 'fill_water_tank'
+            : 'use',
     ),
-    [amount, setAmount] = useState<number | null>(null),
+    [amount, setAmount] = useState<number | null>(refillOnly ? stock.capacity : null),
     [outcome, setOutcome] = useState(''),
     [date, setDate] = useState(today),
     [locationId, setLocation] = useState(effectiveLocationId(stock, state.containers) || ''),
@@ -889,6 +872,7 @@ function ActionModal({
     [note, setNote] = useState(''),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false);
+  const propaneRefill = action === 'fill_propane_tank';
   const maintenance = isTankMaintenance(action);
   const hotTubRotation = action === 'rotate_to_hot_tub';
   const freshWater = action === 'fill_water_tank' || (hotTubRotation && outcome === 'refilled');
@@ -897,7 +881,13 @@ function ActionModal({
     freshWater && date ? rotationDate({ ...stock, lastRotatedOn: date, rotationOn: null }) : null;
   return (
     <Modal
-      title={maintenanceOnly ? 'Record tank maintenance' : 'Update your stock'}
+      title={
+        refillOnly
+          ? 'Record refill'
+          : maintenanceOnly
+            ? 'Record tank maintenance'
+            : 'Update your stock'
+      }
       subtitle={`${stock.name} · ${stock.quantity == null ? 'Unknown quantity' : `${number(stock.quantity, 2)} ${stock.unit} remaining`}`}
       onClose={onClose}
     >
@@ -916,7 +906,13 @@ function ActionModal({
               containerId: containerId || null,
               note,
             });
-            toast(maintenance ? 'Tank maintenance recorded' : 'Inventory updated');
+            toast(
+              propaneRefill
+                ? 'Refill recorded'
+                : maintenance
+                  ? 'Tank maintenance recorded'
+                  : 'Inventory updated',
+            );
             onClose();
           } catch (err) {
             setError((err as Error).message);
@@ -926,37 +922,73 @@ function ActionModal({
         }}
       >
         <div className="modal-body">
-          <Field label="Action">
-            <select
-              aria-label="Inventory action"
-              value={action}
-              onChange={(e) => {
-                setAction(e.target.value);
-                setAmount(null);
-                setOutcome('');
-                setError('');
-              }}
-            >
-              {tank && (
-                <optgroup label="Tank maintenance">
-                  <option value="fill_water_tank">Record fresh fill</option>
-                  {hotTub && <option value="rotate_to_hot_tub">Record hot tub rotation</option>}
-                  <option value="empty_water_tank">Empty tank</option>
-                  <option value="clean_water_tank">Clean tank</option>
-                </optgroup>
-              )}
-              {!maintenanceOnly && (
-                <>
-                  <option value="use">Use some</option>
-                  <option value="refill">{tank ? 'Add gallons' : 'Refill / add more'}</option>
-                  <option value="correct">Set remaining amount</option>
-                  {!hotTub && <option value="rotate">Record rotation</option>}
-                  <option value="move">Move to storage</option>
-                  {!tank && <option value="empty">Mark empty</option>}
-                </>
-              )}
-            </select>
-          </Field>
+          {!refillOnly && (
+            <Field label="Action">
+              <select
+                aria-label="Inventory action"
+                value={action}
+                onChange={(e) => {
+                  setAction(e.target.value);
+                  setAmount(e.target.value === 'fill_propane_tank' ? stock.capacity : null);
+                  setOutcome('');
+                  setError('');
+                }}
+              >
+                {tank && (
+                  <optgroup label="Tank maintenance">
+                    <option value="fill_water_tank">Record fresh fill</option>
+                    {hotTub && <option value="rotate_to_hot_tub">Record hot tub rotation</option>}
+                    <option value="empty_water_tank">Empty tank</option>
+                    <option value="clean_water_tank">Clean tank</option>
+                  </optgroup>
+                )}
+                {!maintenanceOnly && (
+                  <>
+                    <option value="use">Use some</option>
+                    {propaneTank ? (
+                      <option value="fill_propane_tank">Record refill</option>
+                    ) : (
+                      <option value="refill">{tank ? 'Add gallons' : 'Refill / add more'}</option>
+                    )}
+                    <option value="correct">Set remaining amount</option>
+                    {!hotTub && !isPropane(stock) && (
+                      <option value="rotate">Record rotation</option>
+                    )}
+                    <option value="move">Move to storage</option>
+                    {!tank && <option value="empty">Mark empty</option>}
+                  </>
+                )}
+              </select>
+            </Field>
+          )}
+          {propaneRefill && (
+            <>
+              <Field
+                label="Pounds in the tank after refill"
+                hint="Enter the total propane in the tank after filling."
+              >
+                <Num
+                  label="Pounds in the tank after refill"
+                  value={amount}
+                  min={0.00000001}
+                  max={stock.capacity ?? undefined}
+                  required
+                  onChange={setAmount}
+                />
+              </Field>
+              <Field label="Refill date">
+                <input
+                  type="date"
+                  aria-label="Refill date"
+                  value={date}
+                  min={stock.lastRefilledOn ?? undefined}
+                  max={today}
+                  required
+                  onChange={(e) => setDate(e.target.value)}
+                />
+              </Field>
+            </>
+          )}
           {['use', 'refill', 'correct'].includes(action) && (
             <Field
               label={`${action === 'correct' ? 'New remaining amount' : 'Amount'} (${stock.unit})`}
@@ -1112,7 +1144,15 @@ function ActionModal({
             Cancel
           </button>
           <button className="button" disabled={busy}>
-            {busy ? <Busy /> : maintenance ? 'Save maintenance' : 'Save update'}
+            {busy ? (
+              <Busy />
+            ) : propaneRefill ? (
+              'Save refill'
+            ) : maintenance ? (
+              'Save maintenance'
+            ) : (
+              'Save update'
+            )}
           </button>
         </footer>
       </form>
@@ -1620,11 +1660,18 @@ function HistoryModal({ stock, onClose }: { stock: Stock; onClose: () => void })
         {entries.map(({ action, before, after, day, note, createdAt }, i) => {
           const maintenance = isTankMaintenance(action);
           const dated = maintenance && !!after.maintenanceOn;
+          const propaneRefill = action === 'fill_propane_tank';
           const next = rotationDate(after);
           return (
             <div className="history-row" key={i}>
-              <strong>{maintenance ? tankMaintenanceLabels[action] : action}</strong>
-              {tank ? (
+              <strong>
+                {propaneRefill
+                  ? 'Propane refill'
+                  : maintenance
+                    ? tankMaintenanceLabels[action]
+                    : action}
+              </strong>
+              {tank || propaneRefill ? (
                 <time dateTime={day}>{dateLabel(day)}</time>
               ) : (
                 <time dateTime={createdAt}>{new Date(createdAt).toLocaleString()}</time>

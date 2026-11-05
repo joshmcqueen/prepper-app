@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import sharp from 'sharp';
-import { addMonths, calendarDay, stockInputSchema, type StockInput } from '../shared/model.ts';
+import {
+  addMonths,
+  calendarDay,
+  generatorPreset,
+  stovePreset,
+  stockInputSchema,
+  type StockInput,
+} from '../shared/model.ts';
 import type { Store } from './db.ts';
 
 export async function seedDemo(store: Store, now = new Date()) {
@@ -28,18 +35,11 @@ export async function seedDemo(store: Store, now = new Date()) {
       waterPerAdult: 1,
       dogWaterGallons: 0.5,
       dogRationGrams: 400,
-      equipment: [
-        ...settings.equipment,
-        {
-          id: 'generator-gasoline',
-          name: 'Generator · gasoline alternative',
-          fuel: 'gasoline',
-          use: 'generator',
-          rate: 0.5,
-          hours: 4,
-          illustrative: true,
-        },
-      ],
+      fuelSetup: {
+        kitchenNaturalGas: true,
+        generator: { ...generatorPreset, name: 'Sample tri-fuel generator' },
+        stove: { ...stovePreset, name: 'Sample two-burner stove' },
+      },
     });
     for (const [id, name] of [
       ['LOC-PANTRY', 'Pantry'],

@@ -10,6 +10,7 @@ import {
   calendarDay,
   isTankMaintenance,
   isWaterTank,
+  isPropaneTank,
   type StockInput,
   type Stock,
   type Settings,
@@ -58,6 +59,7 @@ export function openStore(dataDir: string) {
     LEFT JOIN food_details f ON f.catalog_id=c.id LEFT JOIN fuel_details u ON u.catalog_id=c.id`;
   function hydrate(row: Row): Stock {
     return {
+      lastRefilledOn: null,
       rotationDays: null,
       rotationDestination: null,
       ...JSON.parse(row.detail as string),
@@ -285,7 +287,22 @@ export function openStore(dataDir: string) {
       checkVersion(before, version);
       const next = { ...before };
       let maintenanceOn: string | undefined;
-      if (isTankMaintenance(actionName)) {
+      if (actionName === 'fill_propane_tank') {
+        if (!isPropaneTank(before))
+          throw new AppError(400, 'Record refills on individual propane cylinders');
+        if (!args.amount || !args.date)
+          throw new AppError(
+            400,
+            'Enter the pounds in the cylinder after refilling and the refill date',
+          );
+        if (args.date > calendarDay(new Date(), getSettings().timezone))
+          throw new AppError(400, 'Refill date cannot be in the future');
+        if (before.lastRefilledOn && args.date < before.lastRefilledOn)
+          throw new AppError(400, 'Refill date cannot be before the last recorded refill');
+        next.quantity = args.amount;
+        next.lastRefilledOn = args.date;
+        maintenanceOn = args.date;
+      } else if (isTankMaintenance(actionName)) {
         if (!isWaterTank(before))
           throw new AppError(400, 'Maintenance is available for water tanks');
         if (actionName === 'rotate_to_hot_tub' && before.rotationDestination !== 'hot_tub')

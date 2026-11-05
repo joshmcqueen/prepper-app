@@ -14,7 +14,14 @@ import {
 import { useApp, PageHeading } from './App';
 import { api, download } from './api';
 import { AsyncButton, Busy, ErrorMessage, Field, Modal, Num, Toggle } from './ui';
-import { settingsSchema, type Settings, type Location } from '../shared/model';
+import {
+  generatorPreset,
+  settingsSchema,
+  stovePreset,
+  type FuelSetup,
+  type Settings,
+  type Location,
+} from '../shared/model';
 
 export function SettingsPage() {
   const { state, reload, toast, mutate } = useApp();
@@ -164,7 +171,7 @@ export function SettingsPage() {
             alerts.
           </p>
           <div className="form-grid">
-            {(['food', 'water', 'fuel', 'dog'] as const).map((category) => (
+            {(['food', 'water', 'dog'] as const).map((category) => (
               <Field
                 key={category}
                 label={`${category === 'dog' ? 'Dog food' : category[0].toUpperCase() + category.slice(1)} goal (days)`}
@@ -197,158 +204,10 @@ export function SettingsPage() {
         <section className="panel settings-section" id="equipment">
           <span className="eyebrow">UNDERSTAND THE ASSUMPTIONS</span>
           <h2>Fuel & equipment</h2>
-          <Toggle
-            checked={form.naturalGasAvailable}
-            onChange={(v) => field('naturalGasAvailable', v)}
-            hint="Treat cooking and generation as utility-powered; preserve stored fuel as a separate reserve."
-          >
-            Natural gas available
-          </Toggle>
-          <Toggle checked={form.generatorNeeded} onChange={(v) => field('generatorNeeded', v)}>
-            Generator needed
-          </Toggle>
-          <p className="section-description">
-            During a gas outage, active equipment shares its fuel reserve. Propane rates use
-            lb/hour; gasoline and diesel use gallons/hour. Different fuels are alternatives, not a
-            combined reserve. Starter rates are illustrative until you replace them with your
-            equipment’s figures.
-          </p>
-          {form.equipment.map((equipment, i) => (
-            <div className="equipment-row" key={equipment.id}>
-              <div className="form-grid">
-                <Field label="Equipment name">
-                  <input
-                    aria-label={`Equipment ${i + 1} name`}
-                    required
-                    value={equipment.name}
-                    onChange={(e) =>
-                      field(
-                        'equipment',
-                        form.equipment.map((v, j) =>
-                          i === j ? { ...v, name: e.target.value } : v,
-                        ),
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Purpose">
-                  <select
-                    aria-label={`Equipment ${i + 1} purpose`}
-                    value={equipment.use}
-                    onChange={(e) =>
-                      field(
-                        'equipment',
-                        form.equipment.map((v, j) =>
-                          i === j ? { ...v, use: e.target.value as 'cooking' | 'generator' } : v,
-                        ),
-                      )
-                    }
-                  >
-                    <option value="cooking">Cooking</option>
-                    <option value="generator">Generation</option>
-                  </select>
-                </Field>
-                <Field label="Fuel">
-                  <select
-                    aria-label={`Equipment ${i + 1} fuel`}
-                    value={equipment.fuel}
-                    onChange={(e) =>
-                      field(
-                        'equipment',
-                        form.equipment.map((v, j) =>
-                          i === j ? { ...v, fuel: e.target.value as typeof equipment.fuel } : v,
-                        ),
-                      )
-                    }
-                  >
-                    {['propane', 'gasoline', 'diesel'].map((f) => (
-                      <option key={f}>{f}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field
-                  label={`Consumption (${equipment.fuel === 'propane' ? 'lb' : 'gallons'}/hour)`}
-                >
-                  <Num
-                    label={`Equipment ${i + 1} rate`}
-                    value={equipment.rate}
-                    required
-                    onChange={(n) =>
-                      field(
-                        'equipment',
-                        form.equipment.map((v, j) => (i === j ? { ...v, rate: n as number } : v)),
-                      )
-                    }
-                  />
-                </Field>
-                <Field label="Operating hours per day">
-                  <Num
-                    label={`Equipment ${i + 1} hours`}
-                    value={equipment.hours}
-                    max={24}
-                    required
-                    onChange={(n) =>
-                      field(
-                        'equipment',
-                        form.equipment.map((v, j) => (i === j ? { ...v, hours: n as number } : v)),
-                      )
-                    }
-                  />
-                </Field>
-                <div className="equipment-controls">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={equipment.illustrative}
-                      onChange={(e) =>
-                        field(
-                          'equipment',
-                          form.equipment.map((v, j) =>
-                            i === j ? { ...v, illustrative: e.target.checked } : v,
-                          ),
-                        )
-                      }
-                    />
-                    Illustrative assumption
-                  </label>
-                  <button
-                    className="icon-button danger-text"
-                    type="button"
-                    aria-label={`Remove ${equipment.name}`}
-                    onClick={() =>
-                      field(
-                        'equipment',
-                        form.equipment.filter((_, j) => i !== j),
-                      )
-                    }
-                  >
-                    <Trash2 size={17} />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="button secondary"
-            onClick={() =>
-              field('equipment', [
-                ...form.equipment,
-                {
-                  id: crypto.randomUUID(),
-                  name: 'New equipment',
-                  fuel: 'propane',
-                  use: 'generator',
-                  rate: 1,
-                  hours: 1,
-                  illustrative: true,
-                },
-              ])
-            }
-          >
-            <Plus size={17} />
-            Add equipment / fuel alternative
-          </button>
+          <FuelEquipmentSettings
+            value={form.fuelSetup}
+            onChange={(value) => field('fuelSetup', value)}
+          />
         </section>
         <section className="panel settings-section" id="notifications">
           <div className="section-heading">
@@ -688,5 +547,176 @@ function LocationRow({ location }: { location: Location }) {
         </Modal>
       )}
     </div>
+  );
+}
+
+function FuelEquipmentSettings({
+  value,
+  onChange,
+}: {
+  value: FuelSetup;
+  onChange: (value: FuelSetup) => void;
+}) {
+  const { generator, stove } = value;
+  return (
+    <>
+      <Field label="Kitchen uses piped natural gas">
+        <select
+          aria-label="Kitchen uses piped natural gas"
+          value={value.kitchenNaturalGas == null ? '' : value.kitchenNaturalGas ? 'yes' : 'no'}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              kitchenNaturalGas: e.target.value === '' ? null : e.target.value === 'yes',
+            })
+          }
+        >
+          <option value="">Unknown</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </Field>
+      <div className="equipment-row">
+        <div className="section-heading">
+          <h3>Generator</h3>
+          <button
+            type="button"
+            className="button secondary small"
+            onClick={() => onChange({ ...value, generator: generatorPreset })}
+          >
+            Use Pulsar PGD105TiSCO preset
+          </button>
+        </div>
+        {generator && (
+          <>
+            <Field label="Generator name">
+              <input
+                aria-label="Generator name"
+                value={generator.name}
+                required
+                maxLength={200}
+                onChange={(e) =>
+                  onChange({ ...value, generator: { ...generator, name: e.target.value } })
+                }
+              />
+            </Field>
+            {(
+              [
+                ['gasoline', 'Gasoline'],
+                ['propane', 'Propane'],
+                ['naturalGas', 'Natural gas'],
+              ] as const
+            ).map(([fuel, label]) => (
+              <div key={fuel} className="form-grid">
+                {(['running', 'peak'] as const).map((kind) => (
+                  <Field label={`${label} ${kind} watts`} key={kind}>
+                    <Num
+                      label={`${label} ${kind} watts`}
+                      required
+                      min={1}
+                      value={generator.watts[fuel][kind]}
+                      onChange={(n) =>
+                        onChange({
+                          ...value,
+                          generator: {
+                            ...generator,
+                            watts: {
+                              ...generator.watts,
+                              [fuel]: { ...generator.watts[fuel], [kind]: n as number },
+                            },
+                          },
+                        })
+                      }
+                    />
+                  </Field>
+                ))}
+              </div>
+            ))}
+            <p className="footnote">
+              Propane rates are illustrative. Low, medium, and high use 25%, 50%, and 75% of the
+              propane running watts.
+            </p>
+            <div className="form-grid">
+              {(['low', 'medium', 'high'] as const).map((load) => (
+                <Field label={`${load[0].toUpperCase() + load.slice(1)} load (lb/hr)`} key={load}>
+                  <Num
+                    label={`${load} load rate`}
+                    required
+                    min={0.001}
+                    value={generator.propaneRates[load]}
+                    onChange={(n) =>
+                      onChange({
+                        ...value,
+                        generator: {
+                          ...generator,
+                          propaneRates: { ...generator.propaneRates, [load]: n as number },
+                        },
+                      })
+                    }
+                  />
+                </Field>
+              ))}
+            </div>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => onChange({ ...value, generator: null })}
+            >
+              Remove generator
+            </button>
+          </>
+        )}
+      </div>
+      <div className="equipment-row">
+        <div className="section-heading">
+          <h3>Outdoor propane stove</h3>
+          <button
+            type="button"
+            className="button secondary small"
+            onClick={() => onChange({ ...value, stove: stovePreset })}
+          >
+            Use Gas One B-4545 preset
+          </button>
+        </div>
+        {stove && (
+          <>
+            <div className="form-grid">
+              <Field label="Stove name">
+                <input
+                  aria-label="Stove name"
+                  value={stove.name}
+                  required
+                  maxLength={200}
+                  onChange={(e) =>
+                    onChange({ ...value, stove: { ...stove, name: e.target.value } })
+                  }
+                />
+              </Field>
+              <Field
+                label="BTU/hr per burner"
+                hint="The preset uses a typical camping-stove setting."
+              >
+                <Num
+                  label="BTU/hr per burner"
+                  required
+                  min={1}
+                  value={stove.btuPerBurner}
+                  onChange={(n) =>
+                    onChange({ ...value, stove: { ...stove, btuPerBurner: n as number } })
+                  }
+                />
+              </Field>
+            </div>
+            <button
+              className="text-button"
+              type="button"
+              onClick={() => onChange({ ...value, stove: null })}
+            >
+              Remove stove
+            </button>
+          </>
+        )}
+      </div>
+    </>
   );
 }

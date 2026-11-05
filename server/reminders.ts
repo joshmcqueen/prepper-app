@@ -111,12 +111,14 @@ export function queueReminders(store: Store, now = new Date()) {
         (settings.digest === 'monthly' && day.endsWith('-01')));
     if (due) {
       const alerts = dashboard.alerts.filter((a) => a.type !== 'setup');
-      const cov = (key: 'food' | 'water' | 'dog' | 'fuel') =>
-        `${key}: ${dashboard[key].days == null ? 'needs setup / utility dependent' : `${Math.floor(dashboard[key].days!)} days`} (goal ${settings.targets[key]})`;
+      const cov = (key: 'food' | 'water' | 'dog') =>
+        `${key}: ${dashboard[key].days == null ? 'needs setup' : `${Math.floor(dashboard[key].days!)} days`} (goal ${settings.targets[key]})`;
+      const reserve = dashboard.fuel;
+      const fuel = `fuel: ${reserve.known ? `${Number(reserve.total.toFixed(2))} lb propane recorded` : 'no measured propane amount'}${reserve.unknown ? ` · ${reserve.unknown} unknown` : ''}${reserve.unconfirmed ? ` · ${reserve.unconfirmed} to review` : ''}`;
       insert(
         `digest:${settings.digest}:${day}`,
         'Haven · Your preparedness summary',
-        `${settings.householdName}\n${['food', 'water', 'fuel', 'dog'].map((k) => cov(k as 'food')).join('\n')}\n\n${alerts.length ? alerts.map(format).join('\n') : 'No upcoming dates or low-stock items.'}\n\n${settings.appBaseUrl}`,
+        `${settings.householdName}\n${(['food', 'water', 'dog'] as const).map(cov).join('\n')}\n${fuel}\n\n${alerts.length ? alerts.map(format).join('\n') : 'No upcoming dates or low-stock items.'}\n\n${settings.appBaseUrl}`,
       );
     }
     for (const job of store.db

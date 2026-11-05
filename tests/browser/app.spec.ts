@@ -826,3 +826,85 @@ test('deletes a resource, bucket, and location with clear consequences', async (
   for (const stock of contents)
     expect(state.stocks.find((s: any) => s.id === stock.id).locationId).toBeNull();
 });
+
+test('Fuel converts exchange cylinders, estimates runtime, and records a dated refill', async ({
+  page,
+  request,
+}) => {
+  expect(
+    (
+      await request.post('/api/database/reset', {
+        data: { mode: 'empty', confirmation: 'RESET' },
+      })
+    ).ok(),
+  ).toBe(true);
+  expect(
+    (
+      await request.post('/api/stocks', {
+        data: {
+          category: 'fuel',
+          name: 'Propane tanks',
+          brand: 'AmeriGas',
+          quantity: 4,
+          unit: 'lb',
+        },
+      })
+    ).ok(),
+  ).toBe(true);
+
+  await page.goto('/fuel');
+  await page.getByRole('button', { name: 'Convert to cylinders: Propane tanks' }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByRole('spinbutton', { name: 'Number of tanks' })).toHaveValue('4');
+  await expect(dialog.getByRole('spinbutton', { name: 'Tank 4 remaining' })).toHaveValue('15');
+  await expect(dialog.getByRole('spinbutton', { name: 'Tank 4 capacity' })).toHaveValue('20');
+  await dialog.getByRole('button', { name: 'Convert cylinders' }).click();
+  const reserve = page.getByRole('region', { name: 'Propane reserve' });
+  await expect(reserve.getByText('4 tanks · 60 lb recorded')).toBeVisible();
+  await expect(reserve.getByText('15 / 20 lb · 75%')).toHaveCount(4);
+
+  await page.getByRole('button', { name: 'Edit equipment' }).click();
+  await page.getByLabel('Kitchen uses piped natural gas').selectOption('yes');
+  await page.getByRole('button', { name: 'Use Pulsar PGD105TiSCO preset' }).click();
+  await page.getByRole('button', { name: 'Use Gas One B-4545 preset' }).click();
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Settings saved');
+  await page.goto('/fuel');
+  await expect(page.getByText('Piped natural gas for kitchen cooking')).toBeVisible();
+  await expect(page.getByText('~24 hr', { exact: true })).toBeVisible();
+  await expect(page.getByText('~129 hr', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Record refill for Propane tank 1', exact: true }).click();
+  await expect(
+    dialog.getByRole('spinbutton', { name: 'Pounds in the tank after refill' }),
+  ).toHaveValue('20');
+  const today = calendarDay(new Date(), 'America/Los_Angeles');
+  await expect(dialog.getByLabel('Refill date')).toHaveValue(today);
+  const refillDate = addDays(today, -1);
+  await dialog.getByLabel('Refill date').fill(refillDate);
+  await dialog.getByRole('button', { name: 'Save refill' }).click();
+  await expect(reserve.getByText('4 tanks · 65 lb recorded')).toBeVisible();
+  await expect(reserve.getByText('20 / 20 lb · 100%')).toBeVisible();
+  await expect(page.getByText('~26 hr', { exact: true })).toBeVisible();
+  await expect(reserve.locator(`time[datetime="${refillDate}"]`)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: `test-results/${test.info().project.name}-fuel.png`,
+    fullPage: true,
+  });
+  const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await reserve.getByRole('button', { name: /^Propane tank 1 / }).click();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await expect(dialog.getByText('Propane refill')).toBeVisible();
+  await expect(dialog.locator(`time[datetime="${refillDate}"]`)).toBeVisible();
+  await page.keyboard.press('Escape');
+
+  await page.goto('/fuel');
+  await page.getByRole('button', { name: 'Add other fuel' }).click();
+  await expect(dialog.getByLabel('Fuel type')).toHaveValue('gasoline');
+  await expect(dialog.getByLabel('Quantity unit')).toHaveValue('gallon');
+  await expect(dialog.getByLabel('Specific rotation date')).toBeVisible();
+});

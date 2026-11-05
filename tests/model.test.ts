@@ -87,20 +87,34 @@ describe('coverage calculations', () => {
     );
     expect(d.water.days).toBe(92);
   });
-  it('budgets propane once for cooking and generation, with separate alternative fuels', () => {
+  it('counts recorded cylinders separately from older entries, unknown amounts, and gasoline', () => {
     const stocks = [
-      stock({ category: 'fuel', fuelType: 'propane', quantity: 20, unit: 'lb' }),
-      stock({ category: 'fuel', fuelType: 'gasoline', quantity: 5, unit: 'gallon' }),
+      stock({ category: 'fuel', packaging: 'tank', quantity: 15, capacity: 20, unit: 'lb' }),
+      stock({ category: 'fuel', packaging: 'tank', quantity: null, capacity: 20, unit: 'lb' }),
+      stock({ category: 'fuel', packaging: 'tank', quantity: 0, capacity: 20, unit: 'lb' }),
+      stock({ category: 'fuel', quantity: 4, unit: 'lb', rotationOn: '2026-01-01' }),
+      stock({
+        category: 'fuel',
+        fuelType: 'gasoline',
+        quantity: 5,
+        unit: 'gallon',
+        rotationOn: '2026-01-01',
+      }),
     ];
-    let d = calculateDashboard(stocks, settings);
-    expect(d.fuel.days).toBeCloseTo(20 / 8.5);
-    expect(d.fuel.total).toBe(20);
-    expect(d.alternativeFuel[0].quantity).toBe(5);
-    d = calculateDashboard(stocks, { ...settings, generatorNeeded: false });
-    expect(d.fuel.days).toBe(40);
-    d = calculateDashboard(stocks, { ...settings, naturalGasAvailable: true });
-    expect(d.fuel.days).toBeNull();
-    expect(d.fuel.total).toBe(20);
+    const dashboard = calculateDashboard(stocks, settings, new Date('2026-01-01T12:00:00Z'));
+    expect(dashboard.fuel).toEqual({ total: 15, known: 2, unknown: 1, unconfirmed: 1 });
+    expect(dashboard.alternativeFuel).toEqual([
+      { type: 'gasoline', quantity: 5, unit: 'gallon', unknown: 0 },
+    ]);
+    expect(
+      dashboard.alerts.filter((alert) => alert.category === 'fuel').map((alert) => alert.type),
+    ).toEqual(['rotation', 'setup']);
+    expect(
+      calculateDashboard(stocks, {
+        ...settings,
+        fuelSetup: { ...settings.fuelSetup, kitchenNaturalGas: true },
+      }).fuel,
+    ).toEqual(dashboard.fuel);
   });
   it('alerts on zero remaining essentials but stops date reminders for empty units', () => {
     const d = calculateDashboard(

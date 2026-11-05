@@ -1145,26 +1145,6 @@
   .toggle-row input:checked::before {
     transform: translateX(14px);
   }
-  .scenario-toggles .toggle-row:first-child {
-    padding-top: 0;
-  }
-  .alternative-fuels {
-    display: flex;
-    gap: 15px;
-    margin-bottom: 25px;
-  }
-  .alternative-fuels .panel {
-    padding: 15px;
-    flex: 1;
-  }
-  .alternative-fuels strong {
-    text-transform: capitalize;
-  }
-  .alternative-fuels p,
-  .alternative-fuels span {
-    font-size: 12px;
-    color: #5c6354;
-  }
   .stock-panel {
     padding: 0;
     overflow: hidden;
@@ -1877,21 +1857,6 @@
   }
   .equipment-row:first-of-type {
     border-top: 0;
-  }
-  .equipment-controls {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-    justify-content: space-between;
-    align-self: center;
-    padding-top: 5px;
-  }
-  .equipment-controls > label {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    font-size: 11px;
-    color: #5a644c;
   }
   .settings-save {
     background: #f6f7efef;
@@ -2836,10 +2801,6 @@
       min-height: 39px;
       padding: 10px;
     }
-    .equipment-controls {
-      padding-top: 0;
-      padding-bottom: 15px;
-    }
     .integration-row {
       font-size: 10px;
     }
@@ -3264,6 +3225,147 @@
     }
     .selection-toolbar {
       padding: 12px 14px;
+    }
+  }
+}
+
+@layer components {
+  .fuel-overview {
+    display: grid;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .fuel-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+  .fuel-reserve h2,
+  .fuel-runtime h2,
+  .fuel-scenario h3 {
+    margin: 0;
+  }
+  .fuel-reserve p,
+  .fuel-runtime p,
+  .fuel-scenario p,
+  .fuel-other p {
+    color: var(--muted);
+    margin: 4px 0 0;
+  }
+  .fuel-tank-shelf {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    gap: 12px;
+    list-style: none;
+    padding: 0;
+    margin: 16px 0 0;
+  }
+  .fuel-tank-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+  .fuel-tank-tile .jug-tile {
+    font-size: 14px;
+    padding: 10px 6px;
+  }
+  .fuel-tank-tile .jug-tile strong {
+    font-size: inherit;
+  }
+  .fuel-tank-tile small,
+  .fuel-runtime small {
+    color: var(--muted);
+  }
+  .fuel-tank-tile .text-button {
+    font-size: 13px;
+  }
+  .fuel-gauge {
+    display: block;
+    width: 95px;
+    max-width: 100%;
+  }
+  .fuel-gauge text {
+    fill: var(--muted);
+    font-weight: 700;
+    font-size: 19px;
+  }
+  .fuel-cylinder-outline {
+    fill: none;
+    stroke: #465f43;
+    stroke-width: 2.2;
+  }
+  .fuel-cylinder-shell {
+    fill: #f5f3e7;
+  }
+  .fuel-cylinder-fill {
+    fill: #a8bf9d;
+  }
+  .fuel-review {
+    border-top: 1px solid var(--line);
+    margin-top: 16px;
+    padding-top: 12px;
+  }
+  .fuel-review h3 {
+    margin: 0;
+  }
+  .fuel-review .button-row {
+    margin-top: 8px;
+  }
+  .fuel-scenario,
+  .fuel-runtime h2 {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .fuel-scenario > svg,
+  .fuel-runtime h2 > svg {
+    flex: none;
+    color: #465f43;
+  }
+  .fuel-runtime dl {
+    margin-bottom: 0;
+  }
+  .fuel-runtime dl > div {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px solid var(--line);
+  }
+  .fuel-runtime dd {
+    margin: 0;
+    text-align: right;
+    font-weight: 650;
+  }
+  .fuel-runtime small {
+    display: block;
+    font-weight: normal;
+  }
+  .fuel-runtime details {
+    margin-top: 12px;
+  }
+  .fuel-estimate-note {
+    align-items: center;
+  }
+  .fuel-estimate-note p {
+    margin: 0;
+    color: var(--muted);
+  }
+  .fuel-cylinder-fields {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 12px;
+    margin: 12px 0;
+  }
+  @media (max-width: 640px) {
+    .fuel-pair {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .fuel-tank-shelf {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 }

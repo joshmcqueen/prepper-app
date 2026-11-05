@@ -26,12 +26,21 @@ import { StockEditor } from './StockEditor';
 import { SettingsPage } from './Settings';
 
 export type ModalState =
-  | { type: 'edit'; category: Category; stock?: Stock; duplicate?: boolean; containerId?: string }
+  | {
+      type: 'edit';
+      category: Category;
+      stock?: Stock;
+      duplicate?: boolean;
+      containerId?: string;
+      otherFuel?: boolean;
+    }
   | { type: 'action' | 'split' | 'history' | 'tank-maintenance'; stock: Stock }
   | { type: 'labels'; containerIds: string[] }
   | { type: 'bag-notes'; ids: string[] }
   | { type: 'container'; id?: string }
   | { type: 'water-jugs'; stocks?: Stock[] }
+  | { type: 'propane-cylinders'; source?: Stock }
+  | { type: 'propane-refill'; stock: Stock }
   | { type: 'delete-stocks'; stocks: Stock[] }
   | null;
 type Context = {
@@ -289,6 +298,7 @@ export function App() {
             category={modal.category}
             stock={modal.stock}
             duplicate={modal.duplicate}
+            otherFuel={modal.otherFuel}
             containerId={modal.containerId}
             onClose={() => setModal(null)}
           />
@@ -325,7 +335,7 @@ export function CoverageCard({
   category,
   compact = false,
 }: {
-  category: 'food' | 'water' | 'fuel' | 'dog';
+  category: 'food' | 'water' | 'dog';
   compact?: boolean;
 }) {
   const { state, navigate } = useApp(),
@@ -333,13 +343,11 @@ export function CoverageCard({
   const percent =
     coverage.days == null ? null : Math.min(100, (coverage.days / coverage.target) * 100);
   const daysLabel =
-    category === 'fuel' && state.settings.naturalGasAvailable
-      ? 'Utility available'
-      : coverage.days == null
-        ? 'Needs setup'
-        : coverage.unknown
-          ? 'days from recorded amounts'
-          : 'days of coverage';
+    coverage.days == null
+      ? 'Needs setup'
+      : coverage.unknown
+        ? 'days from recorded amounts'
+        : 'days of coverage';
   return (
     <button
       className={`coverage-card ${category} ${compact ? 'compact' : ''}`}
@@ -387,6 +395,32 @@ export function CoverageCard({
     </button>
   );
 }
+function FuelReserveCard() {
+  const { state, navigate } = useApp();
+  const { known, total, unknown, unconfirmed } = state.dashboard.fuel;
+  return (
+    <button className="coverage-card fuel" onClick={() => navigate('/fuel')}>
+      <div className="card-top">
+        <CategoryIcon category="fuel" />
+        <span>Fuel</span>
+        <ArrowRight size={18} />
+      </div>
+      <div className="coverage-value">
+        {known ? number(total, 1) : <span className="unknown">—</span>}
+        <span>{known ? 'lb propane recorded' : 'No measured propane amount'}</span>
+      </div>
+      <div className="coverage-total">
+        View tanks and backup runtimes
+        {!!(unknown || unconfirmed) && (
+          <small>
+            {unknown + unconfirmed} propane{' '}
+            {unknown + unconfirmed === 1 ? 'entry needs' : 'entries need'} review
+          </small>
+        )}
+      </div>
+    </button>
+  );
+}
 function DashboardPage() {
   const { state, navigate, setModal, mutate, toast } = useApp();
   const { dashboard, settings } = state;
@@ -423,9 +457,9 @@ function DashboardPage() {
         </button>
       </div>
       <div className="coverage-grid">
-        {(['food', 'water', 'fuel'] as const).map((category) => (
-          <CoverageCard key={category} category={category} />
-        ))}
+        <CoverageCard category="food" />
+        <CoverageCard category="water" />
+        <FuelReserveCard />
       </div>
       {needsSetup && (
         <div className="setup-banner">

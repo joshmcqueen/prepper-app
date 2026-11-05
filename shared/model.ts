@@ -44,6 +44,7 @@ export const stockInputSchema = z
     expiresOn: date,
     rotationOn: date,
     lastRotatedOn: date,
+    lastRefilledOn: date,
     rotationMonths: z.number().int().min(1).max(1200).nullable().default(null),
     rotationDays: z.number().int().min(1).max(36500).nullable().default(null),
     rotationDestination: z.enum(['hot_tub']).nullable().default(null),
@@ -96,6 +97,12 @@ export const stockInputSchema = z
       });
     if (v.category === 'water' && v.unit !== 'gallon')
       ctx.addIssue({ code: 'custom', path: ['unit'], message: 'Water is tracked in gallons' });
+    if (isPropaneTank(v) && v.capacity === 0)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['capacity'],
+        message: 'Enter a positive rated propane capacity or leave it unknown',
+      });
     if (v.category === 'fuel' && v.fuelType === 'propane' && v.unit !== 'lb')
       ctx.addIssue({
         code: 'custom',
@@ -141,6 +148,46 @@ export const equipmentSchema = z.object({
   hours: z.number().min(0).max(24),
   illustrative: z.boolean().default(true),
 });
+const wattageSchema = z
+  .object({
+    running: amount.positive(),
+    peak: amount.positive(),
+  })
+  .refine(({ running, peak }) => peak >= running, 'Peak watts must be at least the running watts');
+const fuelRate = z.number().min(0.001).max(1e6);
+const generatorSchema = z.object({
+  name: text.min(1).max(200),
+  watts: z.object({ gasoline: wattageSchema, propane: wattageSchema, naturalGas: wattageSchema }),
+  propaneRates: z.object({ low: fuelRate, medium: fuelRate, high: fuelRate }),
+});
+const stoveSchema = z.object({
+  name: text.min(1).max(200),
+  btuPerBurner: amount.min(1),
+});
+export const generatorPreset = {
+  name: 'Pulsar PGD105TiSCO',
+  watts: {
+    gasoline: { running: 8500, peak: 10500 },
+    propane: { running: 8000, peak: 9500 },
+    naturalGas: { running: 6800, peak: 8400 },
+  },
+  propaneRates: { low: 2.5, medium: 4, high: 6 },
+} satisfies z.infer<typeof generatorSchema>;
+export const stovePreset = {
+  name: 'Gas One B-4545',
+  btuPerBurner: 10000,
+} satisfies z.infer<typeof stoveSchema>;
+const fuelSetupSchema = z.object({
+  kitchenNaturalGas: z.boolean().nullable().default(null),
+  generator: generatorSchema.nullable().default(null),
+  stove: stoveSchema.nullable().default(null),
+});
+export type FuelSetup = z.infer<typeof fuelSetupSchema>;
+const emptyFuelSetup: FuelSetup = { kitchenNaturalGas: null, generator: null, stove: null };
+
+export const propaneLoads = { low: 0.25, medium: 0.5, high: 0.75 } as const;
+export const propaneBtuPerPound = 21548;
+
 export const settingsSchema = z.object({
   version: z.number().int().min(1).default(1),
   householdName: text.min(1).max(100).default('Our household'),
@@ -154,36 +201,16 @@ export const settingsSchema = z.object({
     .object({
       food: amount.positive().default(90),
       water: amount.positive().default(90),
-      fuel: amount.positive().default(90),
+      fuel: amount.positive().optional(),
       dog: amount.positive().default(90),
     })
-    .default({ food: 90, water: 90, fuel: 90, dog: 90 }),
+    .default({ food: 90, water: 90, dog: 90 }),
   lowDays: amount.default(30),
-  naturalGasAvailable: z.boolean().default(false),
-  generatorNeeded: z.boolean().default(true),
-  equipment: z
-    .array(equipmentSchema)
-    .max(30)
-    .default([
-      {
-        id: 'burner',
-        name: 'Small cooking burner',
-        use: 'cooking',
-        fuel: 'propane',
-        rate: 0.5,
-        hours: 1,
-        illustrative: true,
-      },
-      {
-        id: 'generator',
-        name: 'Tri-fuel generator',
-        use: 'generator',
-        fuel: 'propane',
-        rate: 2,
-        hours: 4,
-        illustrative: true,
-      },
-    ]),
+  fuelSetup: fuelSetupSchema.default(emptyFuelSetup),
+  // Preserve prior settings in existing databases and backups.
+  naturalGasAvailable: z.boolean().optional(),
+  generatorNeeded: z.boolean().optional(),
+  equipment: z.array(equipmentSchema).max(30).optional(),
   supplyCategories: z
     .array(text.min(1).max(100))
     .min(1)
@@ -265,14 +292,17 @@ export type Coverage = {
 export type Dashboard = {
   food: Coverage;
   water: Coverage;
-  fuel: Coverage;
+  fuel: {
+    total: number;
+    known: number;
+    unknown: number;
+    unconfirmed: number;
+  };
   dog: Coverage;
   alerts: Alert[];
   macros: { protein: number; carbs: number; fat: number };
-  alternativeFuel: { type: string; quantity: number; unit: string; days: number | null }[];
+  alternativeFuel: { type: string; quantity: number; unit: string; unknown: number }[];
   foodTypes: { name: string; calories: number }[];
-  utilitiesAvailable: boolean;
-  illustrative: boolean;
   totalItems: number;
 };
 
@@ -335,6 +365,14 @@ export function isTankMaintenance(action: string): action is keyof typeof tankMa
   return Object.hasOwn(tankMaintenanceLabels, action);
 }
 
+export function isPropane(stock: Pick<StockInput, 'category' | 'fuelType'>): boolean {
+  return stock.category === 'fuel' && stock.fuelType === 'propane';
+}
+
+export function isPropaneTank(stock: StockInput): boolean {
+  return isPropane(stock) && stock.packaging === 'tank';
+}
+
 export function isWaterTank(stock: StockInput): boolean {
   return stock.category === 'water' && stock.packaging === 'tank';
 }
@@ -359,7 +397,10 @@ export function calculateDashboard(
   now = new Date(),
 ): Dashboard {
   const today = calendarDay(now, settings.timezone);
-  const coverage = (category: keyof Settings['targets'], unit: string): Coverage => ({
+  const coverage = (
+    category: Exclude<keyof Settings['targets'], 'fuel'>,
+    unit: string,
+  ): Coverage => ({
     total: 0,
     known: 0,
     unknown: 0,
@@ -370,14 +411,12 @@ export function calculateDashboard(
   const result: Dashboard = {
     food: coverage('food', 'kcal'),
     water: coverage('water', 'gallons'),
-    fuel: coverage('fuel', 'lb propane'),
+    fuel: { total: 0, known: 0, unknown: 0, unconfirmed: 0 },
     dog: coverage('dog', 'g'),
     alerts: [],
     macros: { protein: 0, carbs: 0, fat: 0 },
     alternativeFuel: [],
     foodTypes: [],
-    utilitiesAvailable: settings.naturalGasAvailable,
-    illustrative: settings.equipment.some((e) => e.illustrative),
     totalItems: stocks.length,
   };
   const types = new Map<string, number>();
@@ -413,8 +452,9 @@ export function calculateDashboard(
       } else if (active) result.dog.unknown++;
     }
     if (stock.category === 'fuel') {
-      if (stock.fuelType === 'propane') {
-        if (stock.quantity != null) {
+      if (isPropane(stock)) {
+        if (!isPropaneTank(stock)) result.fuel.unconfirmed++;
+        else if (stock.quantity != null) {
           result.fuel.total += stock.quantity;
           result.fuel.known++;
         } else result.fuel.unknown++;
@@ -423,10 +463,11 @@ export function calculateDashboard(
           (f) => f.type === stock.fuelType && f.unit === stock.unit,
         );
         if (!alt) {
-          alt = { type: stock.fuelType, quantity: 0, unit: stock.unit, days: null };
+          alt = { type: stock.fuelType, quantity: 0, unit: stock.unit, unknown: 0 };
           result.alternativeFuel.push(alt);
         }
-        alt.quantity += stock.quantity ?? 0;
+        if (stock.quantity == null) alt.unknown++;
+        else alt.quantity += stock.quantity;
       }
     }
     const leads =
@@ -461,7 +502,7 @@ export function calculateDashboard(
           leadDays: leads,
         });
     };
-    if (active) {
+    if (active && !isPropane(stock)) {
       pushDate('best_by', stock.bestBy, 'Best-by date');
       pushDate('expiration', stock.expiresOn, 'Expires');
       pushDate('rotation', rotationDate(stock), 'Rotation due');
@@ -510,25 +551,10 @@ export function calculateDashboard(
     result.water.days = result.water.total / dailyWater;
   if (settings.dogRationGrams && (result.dog.known > 0 || !result.dog.unknown))
     result.dog.days = result.dog.total / settings.dogRationGrams;
-  const dailyFuel = (fuel: string) =>
-    settings.equipment
-      .filter((e) => e.fuel === fuel && (e.use !== 'generator' || settings.generatorNeeded))
-      .reduce((a, e) => a + e.hours * e.rate, 0);
-  const propaneDaily = dailyFuel('propane');
-  if (
-    !settings.naturalGasAvailable &&
-    propaneDaily > 0 &&
-    (result.fuel.known > 0 || !result.fuel.unknown)
-  )
-    result.fuel.days = result.fuel.total / propaneDaily;
-  for (const alt of result.alternativeFuel) {
-    const daily = dailyFuel(alt.type);
-    if (!settings.naturalGasAvailable && daily > 0) alt.days = alt.quantity / daily;
-  }
   result.foodTypes = [...types]
     .map(([name, calories]) => ({ name, calories }))
     .sort((a, b) => b.calories - a.calories);
-  for (const category of ['food', 'water', 'fuel', 'dog'] as const) {
+  for (const category of ['food', 'water', 'dog'] as const) {
     const cov = result[category];
     if (
       stocks.some((s) => s.category === category) &&

@@ -68,6 +68,146 @@ describe('inventory API and persistence', () => {
     const history = (await runtime.app.inject(`/api/stocks/${item.id}/history`)).json();
     expect(history.map((h: { action: string }) => h.action)).toEqual(['use', 'create']);
   });
+  it('converts legacy propane once and records independent, dated refills', async () => {
+    const legacy = await create(
+      stockInputSchema.parse({
+        category: 'fuel',
+        name: 'Propane tanks',
+        brand: 'AmeriGas',
+        quantity: 4,
+        unit: 'lb',
+        purchasedOn: '2025-01-01',
+        locationId: 'LOC-OUTDOORS',
+        notes: 'Keep this note',
+      }),
+    );
+    const cylinders = Array.from({ length: 4 }, (_, i) => ({
+      name: `Propane tank ${i + 1}`,
+      quantity: 15,
+      capacity: 20,
+    }));
+    const batch = {
+      requestId: '1'.repeat(32),
+      source: { id: legacy.id, version: legacy.version },
+      cylinders,
+    };
+    const submit = (payload = batch) =>
+      runtime.app.inject({
+        method: 'POST',
+        url: '/api/propane-cylinders',
+        payload,
+      });
+    expect((await submit({ ...batch, source: { ...batch.source, version: 2 } })).statusCode).toBe(
+      409,
+    );
+    expect(
+      (
+        await submit({
+          ...batch,
+          cylinders: [...cylinders.slice(0, 3), { ...cylinders[3], quantity: 21 }],
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(runtime.store.all()).toEqual([legacy]);
+
+    runtime.store.db.exec(`
+      CREATE TEMP TRIGGER fail_test_cylinder
+      BEFORE INSERT ON stock_units
+      WHEN json_extract(NEW.detail, '$.name') = 'Propane tank 3'
+      BEGIN
+        SELECT RAISE(ABORT, 'Simulated failure during batch insert');
+      END;
+    `);
+    expect((await submit()).statusCode).toBe(500);
+    expect(runtime.store.all()).toEqual([legacy]);
+    runtime.store.db.exec('DROP TRIGGER fail_test_cylinder');
+
+    const saved = await submit();
+    expect(saved.statusCode, saved.body).toBe(201);
+    const { ids } = saved.json<{ ids: string[] }>();
+    expect(ids[0]).toBe(legacy.id);
+    expect((await submit()).json()).toEqual({ ids });
+    expect((await submit({ ...batch, cylinders: cylinders.slice(0, 1) })).statusCode).toBe(409);
+    expect(runtime.store.all()).toHaveLength(4);
+    for (const id of ids)
+      expect(runtime.store.get(id)).toMatchObject({
+        quantity: 15,
+        capacity: 20,
+        packaging: 'tank',
+        brand: legacy.brand,
+        locationId: legacy.locationId,
+        notes: legacy.notes,
+        purchasedOn: legacy.purchasedOn,
+        lastRefilledOn: null,
+      });
+    const before = runtime.store.get(legacy.id);
+    const action = (version: number, action: string, amount: number | undefined, date?: string) =>
+      runtime.app.inject({
+        method: 'POST',
+        url: `/api/stocks/${legacy.id}/actions`,
+        payload: { version, action, amount, date },
+      });
+    expect((await action(before.version, 'fill_propane_tank', 21, '2025-02-01')).statusCode).toBe(
+      400,
+    );
+    expect((await action(before.version, 'fill_propane_tank', 20, '2099-01-01')).statusCode).toBe(
+      400,
+    );
+    expect((await action(before.version, 'fill_propane_tank', 20, '2025-02-30')).statusCode).toBe(
+      400,
+    );
+    expect((await action(before.version, 'fill_propane_tank', 20)).statusCode).toBe(400);
+    const fill = await action(before.version, 'fill_propane_tank', 20, '2025-02-01');
+    expect(fill.statusCode, fill.body).toBe(200);
+    expect(fill.json()).toMatchObject({ quantity: 20, lastRefilledOn: '2025-02-01' });
+    expect((await runtime.app.inject('/api/state')).json().dashboard.fuel.total).toBe(65);
+    expect((await action(before.version, 'fill_propane_tank', 20, '2025-02-02')).statusCode).toBe(
+      409,
+    );
+    expect(
+      (await action(before.version + 1, 'fill_propane_tank', 20, '2025-01-31')).statusCode,
+    ).toBe(400);
+    expect((await action(before.version + 1, 'use', 2)).json()).toMatchObject({
+      quantity: 18,
+      lastRefilledOn: '2025-02-01',
+    });
+    const history = (await runtime.app.inject(`/api/stocks/${legacy.id}/history`)).json();
+    expect(history.map((row: { action: string }) => row.action)).toEqual([
+      'use',
+      'fill_propane_tank',
+      'edit',
+      'create',
+    ]);
+    expect(JSON.parse(history[1].afterJson)).toMatchObject({ maintenanceOn: '2025-02-01' });
+  });
+
+  it('adds individual propane cylinders with shared details and fills an unknown balance', async () => {
+    const result = await runtime.app.inject({
+      method: 'POST',
+      url: '/api/propane-cylinders',
+      payload: {
+        requestId: '2'.repeat(32),
+        details: { brand: 'Test', purchasedOn: '2025-01-01' },
+        cylinders: [
+          { name: 'Unknown fill', quantity: null, capacity: 20 },
+          { name: 'Partial fill', quantity: 7.5, capacity: 20 },
+          { name: 'Empty', quantity: 0, capacity: 20 },
+        ],
+      },
+    });
+    expect(result.statusCode, result.body).toBe(201);
+    const { ids } = result.json<{ ids: string[] }>();
+    expect(ids.map((id) => runtime.store.get(id).quantity)).toEqual([null, 7.5, 0]);
+    const refilled = await runtime.app.inject({
+      method: 'POST',
+      url: `/api/stocks/${ids[0]}/actions`,
+      payload: { version: 1, action: 'fill_propane_tank', amount: 20, date: '2025-03-01' },
+    });
+    expect(refilled.statusCode, refilled.body).toBe(200);
+    expect(refilled.json()).toMatchObject({ quantity: 20, lastRefilledOn: '2025-03-01' });
+    expect((await runtime.app.inject('/api/state')).json().dashboard.fuel.total).toBe(27.5);
+  });
+
   it('rejects overdraw, overcapacity, malformed dates, and unknown references', async () => {
     const item = await create();
     expect(

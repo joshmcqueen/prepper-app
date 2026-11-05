@@ -12,6 +12,9 @@ import {
   settingsSchema,
   calculateDashboard,
   isWaterTank,
+  isPropane,
+  isPropaneTank,
+  effectiveLocationId,
   waterTankInput,
   type Settings,
 } from '../shared/model.ts';
@@ -145,6 +148,80 @@ export async function buildApp(options: {
     const { items } = z.object({ items: selectionSchema }).parse(req.body);
     return deleteStocks(items);
   });
+  app.post('/api/propane-cylinders', async (req, reply) => {
+    const body = z
+      .strictObject({
+        requestId: z.string().regex(/^[a-f0-9]{32}$/),
+        source: z.object({ id: identity, version: versionSchema }).optional(),
+        details: z
+          .strictObject({
+            brand: stockInputSchema.shape.brand,
+            locationId: stockInputSchema.shape.locationId,
+            purchasedOn: stockInputSchema.shape.purchasedOn,
+            notes: stockInputSchema.shape.notes,
+          })
+          .optional(),
+        cylinders: z
+          .array(
+            z.strictObject({
+              name: stockInputSchema.shape.name,
+              quantity: stockInputSchema.shape.quantity,
+              capacity: stockInputSchema.shape.capacity,
+            }),
+          )
+          .min(1)
+          .max(100),
+      })
+      .parse(req.body);
+    const saved = store.db
+      .transaction(() => {
+        const key = `propane-batch:${body.requestId}`;
+        const payload = JSON.stringify(body);
+        const previous = store.db.prepare('SELECT value FROM meta WHERE key=?').get(key) as
+          { value: string } | undefined;
+        if (previous) {
+          const result = JSON.parse(previous.value) as { payload: string; ids: string[] };
+          if (result.payload !== payload)
+            throw new AppError(
+              409,
+              'This batch was already saved. Reload Fuel to review the saved cylinders.',
+            );
+          return result.ids;
+        }
+        const source = body.source && store.get(body.source.id);
+        if (source && body.source) {
+          store.checkVersion(source, body.source.version);
+          if (!isPropane(source) || isPropaneTank(source))
+            throw new AppError(400, 'Only older propane entries can be converted');
+        }
+        const inputs = body.cylinders.map((cylinder) =>
+          stockInputSchema.parse({
+            ...body.details,
+            ...source,
+            ...cylinder,
+            category: 'fuel',
+            fuelType: 'propane',
+            packaging: 'tank',
+            unit: 'lb',
+            containerId: null,
+            ...(source && { locationId: effectiveLocationId(source, store.containers()) }),
+          }),
+        );
+        const ids = inputs.map(
+          (input, index) =>
+            (index === 0 && source
+              ? store.update(source.id, input, source.version)
+              : store.create(input)
+            ).id,
+        );
+        store.db
+          .prepare('INSERT INTO meta VALUES (?,?)')
+          .run(key, JSON.stringify({ payload, ids }));
+        return ids;
+      })
+      .immediate();
+    return reply.code(201).send({ ids: saved });
+  });
   app.post('/api/water-jugs', async (req, reply) => {
     const { count, details } = z
       .object({ count: z.number().int().min(1).max(100), details: jugChangesSchema })
@@ -220,6 +297,7 @@ export async function buildApp(options: {
           'empty',
           'rotate',
           'fill_water_tank',
+          'fill_propane_tank',
           'rotate_to_hot_tub',
           'empty_water_tank',
           'clean_water_tank',
